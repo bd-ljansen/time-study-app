@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QLabel, QHeaderView, QComboBox, QGraphicsView, QGraphicsScene, 
     QGraphicsPixmapItem, QLineEdit, QTextEdit, QMessageBox, QAction,
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
-    QMenu, QProgressDialog, QStackedWidget
+    QMenu, QProgressDialog, QStackedWidget, QSplitter
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect
 from PyQt5.QtGui import QImage, QPixmap, QColor, QBrush, QFont, QPainter
@@ -711,7 +711,8 @@ class TimeStudyApp(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QHBoxLayout(main_widget)
 
-        left_layout = QVBoxLayout()
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
         self.video_view = ZoomableVideoView()
         self.video_view.setStyleSheet("background-color: #1e1e1e; border: 1px solid #333;")
         left_layout.addWidget(self.video_view, stretch=5)
@@ -771,7 +772,8 @@ class TimeStudyApp(QMainWindow):
         self.time_label.setAlignment(Qt.AlignCenter)
         left_layout.addWidget(self.time_label)
 
-        right_layout = QVBoxLayout()
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
         table_controls = QHBoxLayout()
 
         self.view_mode_combo = QComboBox()
@@ -883,8 +885,13 @@ class TimeStudyApp(QMainWindow):
         self.stacked_widget.addWidget(self.category_tree)
 
         right_layout.addWidget(self.stacked_widget)
-        main_layout.addLayout(left_layout, stretch=4)
-        main_layout.addLayout(right_layout, stretch=5)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 5)
+        main_layout.addWidget(splitter)
 
     def toggle_view_mode(self, index):
         if index == 1:
