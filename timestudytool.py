@@ -2,6 +2,7 @@ import sys
 import csv
 import json
 import os
+import random
 import cv2
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -19,6 +20,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect
 from PyQt5.QtGui import QImage, QPixmap, QColor, QBrush, QFont, QPainter
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECTS_DIR = os.path.join(SCRIPT_DIR, "Projects")
 
 # Google Sheets Dropdown Chip Color Palette
 CATEGORY_COLORS = {
@@ -316,6 +319,8 @@ class TimeStudyApp(QMainWindow):
 
         self.custom_gen_cats = set()
         self.custom_spec_cats = set()
+        self.custom_category_colors = {}
+        self.custom_color_hue_offset = random.randrange(24)
         self.time_editing_item = None
 
         self.undo_stack = []
@@ -378,6 +383,11 @@ class TimeStudyApp(QMainWindow):
                 
                 # If we've reached or passed the segment's end time
                 if current_ms >= end_ms and end_ms > 0:
+                    slice_index = getattr(self.active_category_item, "category_slice_index", 0)
+                    slices = getattr(self.active_category_item, "category_slices", [])
+                    if slice_index + 1 < len(slices):
+                        self._play_category_slice(self.active_category_item, slice_index + 1)
+                        return
                     next_item = self.get_next_category_segment(self.active_category_item)
                     if next_item:
                         self.play_category_segment(next_item) # Auto-play next clip
@@ -435,9 +445,16 @@ class TimeStudyApp(QMainWindow):
             interval = max(1, int(1000 / self.fps))
             self.timer.setInterval(interval)
 
+    def _default_browse_dir(self):
+        if self.project_path:
+            return os.path.dirname(self.project_path)
+        if os.path.isdir(PROJECTS_DIR):
+            return PROJECTS_DIR
+        return ""
+
     def open_file_dialog(self):
         """Triggers the video loading dialog."""
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Video File", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open Video File", self._default_browse_dir(), "Video Files (*.mp4 *.avi *.mkv *.mov)")
         if file_path:
             self.add_video_group(file_path)
 
@@ -481,20 +498,76 @@ class TimeStudyApp(QMainWindow):
         """Executes the delayed seek."""
         self.seek_position(self.target_seek_ms)
         
+    def _clear_custom_category_colors(self):
+        for cat_name in self.custom_category_colors:
+            CATEGORY_COLORS.pop(cat_name, None)
+        self.custom_category_colors.clear()
+
+    def _category_color_distance(self, first_color, second_color):
+        first = QColor(first_color)
+        second = QColor(second_color)
+        first_rgb = (first.red(), first.green(), first.blue())
+        second_rgb = (second.red(), second.green(), second.blue())
+        return sum((first_rgb[i] - second_rgb[i]) ** 2 for i in range(3)) ** 0.5
+
+    def _generate_custom_category_color(self, cat_name):
+        custom_colors = [colors[0] for colors in self.custom_category_colors.values() if colors[0] != CATEGORY_COLORS.get(cat_name, (None,))[0]]
+        default_colors = [colors[0] for name, colors in CATEGORY_COLORS.items() if name not in self.custom_category_colors]
+        custom_hues = [QColor(color).hue() for color in custom_colors if QColor(color).hue() >= 0]
+        candidates = []
+        candidate_hues = [(self.custom_color_hue_offset + (index * 24)) % 360 for index in range(15)]
+        random.shuffle(candidate_hues)
+        for hue in candidate_hues:
+            background = QColor.fromHsv(hue, 75, 245).name().upper()
+            hue_distance = min(
+                (min(abs(hue - existing), 360 - abs(hue - existing)) for existing in custom_hues),
+                default=float("inf")
+            )
+            custom_distance = min(
+                (self._category_color_distance(background, existing) for existing in custom_colors),
+                default=float("inf")
+            )
+            default_distance = min(
+                (self._category_color_distance(background, existing) for existing in default_colors),
+                default=float("inf")
+            )
+            candidates.append((hue_distance, custom_distance, default_distance, background))
+
+        background = max(candidates, key=lambda candidate: (candidate[0], candidate[1], candidate[2]))[3]
+        bg_color = QColor(background)
+        foreground = QColor.fromHsv(bg_color.hue(), 220, 95).name().upper()
+        colors = (background, foreground)
+        self.custom_category_colors[cat_name] = colors
+        CATEGORY_COLORS[cat_name] = colors
+        return colors
+
+    def _ensure_category_color(self, cat_name):
+        if cat_name and cat_name not in CATEGORY_COLORS:
+            self._generate_custom_category_color(cat_name)
+
+    def _load_saved_category_colors(self, saved_colors):
+        for cat_name, color_data in (saved_colors or {}).items():
+            if not isinstance(color_data, dict):
+                continue
+            background = QColor(color_data.get("background", ""))
+            foreground = QColor(color_data.get("foreground", ""))
+            if background.isValid() and foreground.isValid():
+                colors = (background.name().upper(), foreground.name().upper())
+                self.custom_category_colors[cat_name] = colors
+                CATEGORY_COLORS[cat_name] = colors
+
     def _load_custom_categories(self, gen_cats, spec_cats):
         for cat in (gen_cats or []):
             if cat and cat not in self.cat_general_options:
                 self.cat_general_options.append(cat)
                 self.custom_gen_cats.add(cat)
-                if cat not in CATEGORY_COLORS:
-                    CATEGORY_COLORS[cat] = ("#E0F2FE", "#0369A1")
+                self._ensure_category_color(cat)
                     
         for cat in (spec_cats or []):
             if cat and cat not in self.cat_specific_options:
                 self.cat_specific_options.append(cat)
                 self.custom_spec_cats.add(cat)
-                if cat not in CATEGORY_COLORS:
-                    CATEGORY_COLORS[cat] = ("#E0F2FE", "#0369A1")
+                self._ensure_category_color(cat)
 
         self.cat_general_options.sort()
         self.cat_specific_options.sort(key=lambda x: (
@@ -511,14 +584,12 @@ class TimeStudyApp(QMainWindow):
                 if cat_gen and cat_gen not in self.cat_general_options:
                     self.cat_general_options.append(cat_gen)
                     self.custom_gen_cats.add(cat_gen)
-                    if cat_gen not in CATEGORY_COLORS:
-                        CATEGORY_COLORS[cat_gen] = ("#E0F2FE", "#0369A1")
+                    self._ensure_category_color(cat_gen)
                         
                 if cat_spec and cat_spec not in self.cat_specific_options:
                     self.cat_specific_options.append(cat_spec)
                     self.custom_spec_cats.add(cat_spec)
-                    if cat_spec not in CATEGORY_COLORS:
-                        CATEGORY_COLORS[cat_spec] = ("#E0F2FE", "#0369A1")
+                    self._ensure_category_color(cat_spec)
 
         self.cat_general_options.sort()
         self.cat_specific_options.sort(key=lambda x: (
@@ -614,9 +685,9 @@ class TimeStudyApp(QMainWindow):
         save_as_action.triggered.connect(self.save_project_as)
         file_menu.addAction(save_as_action)
         file_menu.addSeparator()
-        export_excel_action = QAction("Export to Excel (.xlsx)...", self)
-        export_excel_action.triggered.connect(self.export_to_excel)
-        file_menu.addAction(export_excel_action)
+        export_csv_action = QAction("Export to CSV (.csv)...", self)
+        export_csv_action.triggered.connect(self.export_to_csv)
+        file_menu.addAction(export_csv_action)
         edit_menu = menu_bar.addMenu("Edit")
         self.undo_action = QAction("↩ Undo", self)
         self.undo_action.setShortcut("Ctrl+Z")
@@ -740,10 +811,10 @@ class TimeStudyApp(QMainWindow):
         self.import_excel_btn.clicked.connect(self.import_from_excel)
         table_controls.addWidget(self.import_excel_btn)
         
-        self.export_btn = QPushButton("Export to Excel (.xlsx)")
+        self.export_btn = QPushButton("Export to CSV (.csv)")
         self.export_btn.setFocusPolicy(Qt.NoFocus)
         self.export_btn.setStyleSheet("background-color: #28a745; color: white; font-weight: bold;")
-        self.export_btn.clicked.connect(self.export_to_excel)
+        self.export_btn.clicked.connect(self.export_to_csv)
         table_controls.addWidget(self.export_btn)
         right_layout.addLayout(table_controls)
 
@@ -865,38 +936,20 @@ class TimeStudyApp(QMainWindow):
         self.category_tree.setUpdatesEnabled(False)
         self.category_tree.clear()
         cat_segments = {}
-        
-        for g_data in self.saved_video_state:
-            video_path = g_data.get("video_path", "")
-            vid_name = os.path.basename(video_path) if video_path else "Unknown"
-            dur_ms = g_data.get("duration_ms", 0)
-            rows = g_data.get("rows", [])
-            
-            for c in range(len(rows)):
-                row = rows[c]
-                start_ms = row["time_ms"]
-                end_ms = rows[c+1]["time_ms"] if c+1 < len(rows) else dur_ms
-                delta_ms = max(0, end_ms - start_ms)
-                
-                cat_spec = row.get("cat_spec", "").strip()
-                if not cat_spec:
-                    cat_spec = "Uncategorized"
-                    
-                if cat_spec not in cat_segments:
-                    cat_segments[cat_spec] = {"total_time": 0, "segments": []}
-                    
-                cat_segments[cat_spec]["total_time"] += delta_ms
-                cat_segments[cat_spec]["segments"].append({
-                    "video_path": video_path,
-                    "vid_name": vid_name,
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "delta_ms": delta_ms,
-                    "slide": row.get("slide", ""),
-                    "desc": row.get("desc", ""),
-                    "g_idx": self.saved_video_state.index(g_data),
-                    "r_idx": c
-                })
+
+        for segment in self.get_category_segments(self.saved_video_state):
+            cat_spec = segment["cat_spec"]
+            if cat_spec not in cat_segments:
+                cat_segments[cat_spec] = {"total_time": 0, "segments": []}
+
+            cat_segments[cat_spec]["total_time"] += segment["delta_ms"]
+            segments = cat_segments[cat_spec]["segments"]
+            if segments and self._is_continuation_segment(segments[-1], segment):
+                segments[-1]["slices"].append(segment)
+                segments[-1]["delta_ms"] += segment["delta_ms"]
+            else:
+                segment["slices"] = [segment]
+                segments.append(segment)
                 
         sorted_cats = sorted(cat_segments.items(), key=lambda x: x[1]["total_time"], reverse=True)
         bold_font = QFont()
@@ -922,8 +975,7 @@ class TimeStudyApp(QMainWindow):
                 child = QTreeWidgetItem(cat_item)
                 child.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
                 
-                # Format Video file name like "Video 1 (Filename.mp4)"
-                vid_display_name = f"Video {seg['g_idx'] + 1} ({seg['vid_name']})"
+                vid_display_name = f"Video {seg['video_g_idx'] + 1} ({seg['vid_name']})"
                 
                 child.setText(0, seg["slide"])
                 child.setText(1, vid_display_name)
@@ -933,6 +985,8 @@ class TimeStudyApp(QMainWindow):
                 child.setData(1, Qt.UserRole, seg["start_ms"])
                 child.setData(2, Qt.UserRole, seg["end_ms"])
                 child.setData(3, Qt.UserRole, seg["delta_ms"])
+                child.category_slices = seg["slices"]
+                child.category_slice_index = 0
                 child.g_idx = seg["g_idx"]
                 child.r_idx = seg["r_idx"]
                 
@@ -947,6 +1001,60 @@ class TimeStudyApp(QMainWindow):
                 
         self.category_tree.expandAll()
         self.category_tree.setUpdatesEnabled(True)
+
+    def _is_continuation_segment(self, previous_segment, segment):
+        return (
+            previous_segment["g_idx"] == segment["g_idx"]
+            and previous_segment["r_idx"] == segment["r_idx"]
+            and segment["start_ms"] == 0
+        )
+
+    def get_category_segments(self, groups_data):
+        """Return category segments, including unmarked time at video boundaries."""
+        for group_index, group in enumerate(groups_data):
+            rows = group.get("rows", [])
+            duration_ms = group.get("duration_ms", 0)
+            video_path = group.get("video_path", "")
+
+            for row_index, row in enumerate(rows):
+                start_ms = row["time_ms"]
+                end_ms = rows[row_index + 1]["time_ms"] if row_index + 1 < len(rows) else duration_ms
+                yield self._make_category_segment(
+                    row, video_path, group_index, row_index, group_index, start_ms, end_ms
+                )
+
+                if row_index != len(rows) - 1:
+                    continue
+
+                for next_group_index in range(group_index + 1, len(groups_data)):
+                    next_group = groups_data[next_group_index]
+                    next_rows = next_group.get("rows", [])
+                    next_duration_ms = next_group.get("duration_ms", 0)
+                    next_video_path = next_group.get("video_path", "")
+                    continuation_end_ms = next_rows[0]["time_ms"] if next_rows else next_duration_ms
+                    yield self._make_category_segment(
+                        row, next_video_path, next_group_index, row_index, group_index,
+                        0, continuation_end_ms
+                    )
+                    if next_rows:
+                        break
+
+    def _make_category_segment(self, row, video_path, video_group_index, row_index, source_group_index, start_ms, end_ms):
+        start_ms = max(0, start_ms)
+        end_ms = max(start_ms, end_ms)
+        return {
+            "video_path": video_path,
+            "vid_name": os.path.basename(video_path) if video_path else "Unknown",
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "delta_ms": end_ms - start_ms,
+            "slide": row.get("slide", ""),
+            "desc": row.get("desc", ""),
+            "cat_spec": row.get("cat_spec", "").strip() or "Uncategorized",
+            "g_idx": source_group_index,
+            "r_idx": row_index,
+            "video_g_idx": video_group_index
+        }
 
     def jump_to_category(self, video_item):
         """Switches to Category Mode, finds the matching item, and auto-scrolls to it."""
@@ -986,21 +1094,14 @@ class TimeStudyApp(QMainWindow):
             return
 
         cat_segments = {}
-        for g_data in base_state:
-            video_path = g_data.get("video_path", "")
-            dur_ms = g_data.get("duration_ms", 0)
-            rows = g_data.get("rows", [])
-            if not video_path or not os.path.exists(video_path): continue
+        for segment in self.get_category_segments(base_state):
+            video_path = segment["video_path"]
+            if not video_path or not os.path.exists(video_path):
+                continue
 
-            for c in range(len(rows)):
-                row = rows[c]
-                start_ms = row["time_ms"]
-                end_ms = rows[c+1]["time_ms"] if c+1 < len(rows) else dur_ms
-                cat_spec = row.get("cat_spec", "").strip() or "Uncategorized"
-
-                if cat_spec not in cat_segments:
-                    cat_segments[cat_spec] = []
-                cat_segments[cat_spec].append((video_path, start_ms, end_ms))
+            cat_segments.setdefault(segment["cat_spec"], []).append(
+                (video_path, segment["start_ms"], segment["end_ms"])
+            )
 
         if not cat_segments:
             QMessageBox.information(self, "Export", "No categorized segments found.")
@@ -1081,14 +1182,29 @@ class TimeStudyApp(QMainWindow):
             QMessageBox.information(self, "Export Complete", f"Successfully exported video to:\n{out_path}")
 
     def play_category_segment(self, item):
-        video_path = item.data(0, Qt.UserRole)
-        start_ms = item.data(1, Qt.UserRole)
+        self._play_category_slice(item, 0)
+
+    def _play_category_slice(self, item, slice_index):
+        slices = getattr(item, "category_slices", [])
+        if slices:
+            segment = slices[slice_index]
+            video_path = segment["video_path"]
+            start_ms = segment["start_ms"]
+            end_ms = segment["end_ms"]
+        else:
+            video_path = item.data(0, Qt.UserRole)
+            start_ms = item.data(1, Qt.UserRole)
+            end_ms = item.data(2, Qt.UserRole)
         
         if not video_path or not os.path.exists(video_path):
             QMessageBox.warning(self, "Video Missing", f"Could not find video file:\n{video_path}")
             return
             
         self.active_category_item = item
+        item.category_slice_index = slice_index
+        item.setData(0, Qt.UserRole, video_path)
+        item.setData(1, Qt.UserRole, start_ms)
+        item.setData(2, Qt.UserRole, end_ms)
         
         if self.active_video_path != video_path or not self.cap or not self.cap.isOpened():
             if self.cap:
@@ -1168,8 +1284,7 @@ class TimeStudyApp(QMainWindow):
             else:
                 self.custom_spec_cats.add(clean_cat)
 
-            if clean_cat not in CATEGORY_COLORS:
-                CATEGORY_COLORS[clean_cat] = ("#E0F2FE", "#0369A1")
+            self._ensure_category_color(clean_cat)
 
             item.setData(role_col, Qt.UserRole, clean_cat)
             self.refresh_all_combos()
@@ -1190,6 +1305,8 @@ class TimeStudyApp(QMainWindow):
                 options.append(clean_cat)
             if old_name in CATEGORY_COLORS and clean_cat not in CATEGORY_COLORS:
                 CATEGORY_COLORS[clean_cat] = CATEGORY_COLORS[old_name]
+                if old_name in self.custom_category_colors:
+                    self.custom_category_colors[clean_cat] = self.custom_category_colors.pop(old_name)
             if old_name in options:
                 options.remove(old_name)
 
@@ -1228,6 +1345,10 @@ class TimeStudyApp(QMainWindow):
                 self.custom_gen_cats.remove(cat_name)
             elif cat_type == "specific" and cat_name in self.custom_spec_cats:
                 self.custom_spec_cats.remove(cat_name)
+
+            self.custom_category_colors.pop(cat_name, None)
+            if cat_name not in self.default_cat_general_options and cat_name not in self.default_cat_specific_options:
+                CATEGORY_COLORS.pop(cat_name, None)
             
             self.video_tree.blockSignals(True)
             for i in range(self.video_tree.topLevelItemCount()):
@@ -1301,7 +1422,7 @@ class TimeStudyApp(QMainWindow):
     def replace_video_for_group(self, group_item):
         old_path = group_item.data(0, Qt.UserRole) or ""
         grp_name = os.path.basename(old_path) if old_path else "Unlinked Video"
-        new_path, _ = QFileDialog.getOpenFileName(self, f"Select Replacement Video File for {grp_name}", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
+        new_path, _ = QFileDialog.getOpenFileName(self, f"Select Replacement Video File for {grp_name}", self._default_browse_dir(), "Video Files (*.mp4 *.avi *.mkv *.mov)")
         if not new_path or not os.path.exists(new_path): return
         self.push_state()
         dur_ms = 0
@@ -1372,7 +1493,7 @@ class TimeStudyApp(QMainWindow):
         self.refresh_playback_ui()
 
     def import_from_excel(self):
-        excel_path, _ = QFileDialog.getOpenFileName(self, "Import Excel Spreadsheet", "", "Excel Workbook (*.xlsx *.xls)")
+        excel_path, _ = QFileDialog.getOpenFileName(self, "Import Excel Spreadsheet", self._default_browse_dir(), "Excel Workbook (*.xlsx *.xls)")
         if not excel_path: return
         progress = QProgressDialog(self)
         progress.setWindowTitle("Loading")
@@ -1477,7 +1598,7 @@ class TimeStudyApp(QMainWindow):
         for idx, grp in enumerate(parsed_groups):
             grp_name = grp["name"]
             grp_rows = grp["rows"]
-            video_path, _ = QFileDialog.getOpenFileName(self, f"Select Video File for '{grp_name}' (Group {idx + 1}/{len(parsed_groups)})\n(Click Cancel to skip picking a video)", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
+            video_path, _ = QFileDialog.getOpenFileName(self, f"Select Video File for '{grp_name}' (Group {idx + 1}/{len(parsed_groups)})\n(Click Cancel to skip picking a video)", self._default_browse_dir(), "Video Files (*.mp4 *.avi *.mkv *.mov)")
             self.add_video_group(video_path, existing_rows=grp_rows)
         self.renumber_video_groups()
         self.refresh_all_combos()
@@ -1947,7 +2068,12 @@ class TimeStudyApp(QMainWindow):
         if not group_item: return
         file_path = group_item.data(0, Qt.UserRole)
         if not file_path or not os.path.exists(file_path):
-            new_path, _ = QFileDialog.getOpenFileName(self, f"Locate Missing Video ({os.path.basename(str(file_path))})", "", "Video Files (*.mp4 *.avi *.mkv *.mov)")
+            found = self._find_moved_video(os.path.basename(str(file_path)), self._default_browse_dir())
+            if found:
+                file_path = found
+                group_item.setData(0, Qt.UserRole, file_path)
+        if not file_path or not os.path.exists(file_path):
+            new_path, _ = QFileDialog.getOpenFileName(self, f"Locate Missing Video ({os.path.basename(str(file_path))})", self._default_browse_dir(), "Video Files (*.mp4 *.avi *.mkv *.mov)")
             if new_path and os.path.exists(new_path):
                 file_path = new_path
                 group_item.setData(0, Qt.UserRole, file_path)
@@ -2079,6 +2205,9 @@ class TimeStudyApp(QMainWindow):
 
         self.cat_general_options = self.default_cat_general_options.copy()
         self.cat_specific_options = self.default_cat_specific_options.copy()
+        self.custom_gen_cats.clear()
+        self.custom_spec_cats.clear()
+        self._clear_custom_category_colors()
         
         self.project_path = ""
         self.active_video_path = ""
@@ -2096,17 +2225,54 @@ class TimeStudyApp(QMainWindow):
         return self._write_project_file(self.project_path)
 
     def save_project_as(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save Project File", "", "Time Study Project (*.tsproject *.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save Project File", self._default_browse_dir(), "Time Study Project (*.tsproject *.json)")
         if not path: return False
         self.project_path = path
         return self._write_project_file(path)
 
+    @staticmethod
+    def _make_relative_path(file_path, project_file_path):
+        if not file_path or not project_file_path:
+            return file_path
+        try:
+            return os.path.relpath(file_path, os.path.dirname(project_file_path))
+        except ValueError:
+            return file_path  # e.g. different drive on Windows
+
+    @staticmethod
+    def _find_moved_video(filename, search_root):
+        if not filename or not search_root or not os.path.isdir(search_root):
+            return None
+        for root, _dirs, files in os.walk(search_root):
+            if filename in files:
+                return os.path.join(root, filename)
+        return None
+
+    def _resolve_project_path(self, stored_path, project_file_path):
+        if not stored_path:
+            return stored_path
+        base_dir = os.path.dirname(project_file_path) if project_file_path else ""
+        candidate = stored_path if os.path.isabs(stored_path) else os.path.normpath(os.path.join(base_dir, stored_path))
+        if os.path.exists(candidate):
+            return candidate
+        # Video path may point at its old, pre-move location; search near the project file for a same-named file.
+        found = self._find_moved_video(os.path.basename(stored_path), base_dir)
+        return found if found else candidate
+
     def _write_project_file(self, path):
         current_ms = int(self.cap.get(cv2.CAP_PROP_POS_MSEC)) if self.cap else 0
-        groups_data = self.get_current_state()
+        groups_data = []
+        for g in self.get_current_state():
+            g = dict(g)
+            g["video_path"] = self._make_relative_path(g.get("video_path", ""), path)
+            groups_data.append(g)
         project_data = {
-            "version": 4, "active_video_path": self.active_video_path, "last_position_ms": current_ms,
-            "video_groups": groups_data, "custom_gen_cats": list(self.custom_gen_cats), "custom_spec_cats": list(self.custom_spec_cats)
+            "version": 4, "active_video_path": self._make_relative_path(self.active_video_path, path), "last_position_ms": current_ms,
+            "video_groups": groups_data, "custom_gen_cats": list(self.custom_gen_cats), "custom_spec_cats": list(self.custom_spec_cats),
+            "custom_category_colors": {
+                cat_name: {"background": colors[0], "foreground": colors[1]}
+                for cat_name, colors in self.custom_category_colors.items()
+            }
         }
         try:
             with open(path, 'w', encoding='utf-8') as f: json.dump(project_data, f, indent=4)
@@ -2132,7 +2298,7 @@ class TimeStudyApp(QMainWindow):
             elif reply == QMessageBox.Cancel:
                 return
 
-        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Time Study Project (*.tsproject *.json);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Open Project", self._default_browse_dir(), "Time Study Project (*.tsproject *.json);;All Files (*)")
         if not path: return
         self.view_mode_combo.setCurrentIndex(0)
         progress = QProgressDialog(self)
@@ -2156,6 +2322,8 @@ class TimeStudyApp(QMainWindow):
         self.update_undo_redo_actions()
         self.project_path = path
         
+        self._clear_custom_category_colors()
+        self._load_saved_category_colors(data.get("custom_category_colors", {}))
         self._load_custom_categories(data.get("custom_gen_cats", []), data.get("custom_spec_cats", []))
 
         video_groups = data.get("video_groups", [])
@@ -2166,7 +2334,7 @@ class TimeStudyApp(QMainWindow):
         self.video_tree.setUpdatesEnabled(False)
         
         for g_data in video_groups:
-            file_path = g_data.get("video_path", "")
+            file_path = self._resolve_project_path(g_data.get("video_path", ""), path)
             rows = g_data.get("rows", [])
             dur_ms = g_data.get("duration_ms", 0)
             self.add_video_group(file_path, existing_rows=rows, default_duration_ms=dur_ms)
@@ -2174,7 +2342,7 @@ class TimeStudyApp(QMainWindow):
         self.video_tree.setUpdatesEnabled(True)
         self.is_restoring_state = False
         
-        active_path = data.get("active_video_path") or data.get("video_path", "")
+        active_path = self._resolve_project_path(data.get("active_video_path") or data.get("video_path", ""), path)
         
         last_ms = data.get("last_position_ms", 0)
         switched = False
@@ -2193,7 +2361,7 @@ class TimeStudyApp(QMainWindow):
         self.unsaved_changes = False
 
     def import_project_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import Project File", "", "Time Study Project (*.tsproject *.json);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import Project File", self._default_browse_dir(), "Time Study Project (*.tsproject *.json);;All Files (*)")
         if not path: return
         self.view_mode_combo.setCurrentIndex(0)
         progress = QProgressDialog(self)
@@ -2240,13 +2408,14 @@ class TimeStudyApp(QMainWindow):
         progress.show()
         QApplication.processEvents()
         
+        self._load_saved_category_colors(data.get("custom_category_colors", {}))
         self._load_custom_categories(data.get("custom_gen_cats", []), data.get("custom_spec_cats", []))
         
         self.is_restoring_state = True
         self.video_tree.setUpdatesEnabled(False)
         
         for g_data in video_groups:
-            file_path = g_data.get("video_path", "")
+            file_path = self._resolve_project_path(g_data.get("video_path", ""), path)
             rows = g_data.get("rows", [])
             dur_ms = g_data.get("duration_ms", 0)
             self.add_video_group(file_path, existing_rows=rows, default_duration_ms=dur_ms)
@@ -2261,76 +2430,34 @@ class TimeStudyApp(QMainWindow):
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
         self.proj_status_label.setText(f"Project: {filename}")
 
-    def export_to_excel(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export to Excel", "", "Excel Workbook (*.xlsx)")
-        if not path: return
-        
+    def export_to_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export to CSV", self._default_browse_dir(), "CSV Files (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+
         groups_data = self.saved_video_state if self.view_mode == "category" else self.get_current_state()
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Time Study"
-        headers = ["Slide", "Category, General", "Category, Specific", "Description", "Time"]
-        ws.append(headers)
-        header_fill = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
-        header_font = Font(name="Segoe UI", size=11, bold=True, color="111827")
-        header_border = Border(bottom=Side(style='medium', color='D1D5DB'))
-        for col_idx in range(1, 6):
-            cell = ws.cell(row=1, column=col_idx)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.border = header_border
-            cell.alignment = Alignment(horizontal="center" if col_idx in [1, 5] else "left", vertical="center")
-        thin_border = Border(left=Side(style='thin', color='E5E7EB'), right=Side(style='thin', color='E5E7EB'), top=Side(style='thin', color='E5E7EB'), bottom=Side(style='thin', color='E5E7EB'))
+        with open(path, "w", newline="", encoding="utf-8-sig") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["Slide", "Category, General", "Category, Specific", "Description", "Time"])
 
-        excel_row_idx = 2
-        
-        for i, grp in enumerate(groups_data):
-            start_desc = f"START VIDEO {i + 1}"
-            start_time = "00:00"
-            ws.append(["", "", "", start_desc, start_time])
-            excel_row_idx += 1
-            rows = grp.get("rows", [])
-            for row in rows:
-                ws.append([
-                    row.get("slide", ""), 
-                    row.get("cat_gen", ""), 
-                    row.get("cat_spec", ""), 
-                    row.get("desc", ""), 
-                    row.get("time_str", "00:00")
+            for index, group in enumerate(groups_data, start=1):
+                writer.writerow(["", "", "", f"START VIDEO {index}", "00:00"])
+                for row in group.get("rows", []):
+                    writer.writerow([
+                        row.get("slide", ""),
+                        row.get("cat_gen", ""),
+                        row.get("cat_spec", ""),
+                        row.get("desc", ""),
+                        row.get("time_str", "00:00")
+                    ])
+                writer.writerow([
+                    "", "", "", f"END VIDEO {index}",
+                    self.format_ms(group.get("duration_ms", 0))
                 ])
-                excel_row_idx += 1
-            end_desc = f"END VIDEO {i + 1}"
-            end_time = self.format_ms(grp.get("duration_ms", 0))
-            ws.append(["", "", "", end_desc, end_time])
-            excel_row_idx += 1
 
-        for r in range(2, excel_row_idx):
-            for c_idx in range(1, 6):
-                c_cell = ws.cell(row=r, column=c_idx)
-                c_cell.font = Font(name="Segoe UI", size=10)
-                c_cell.border = thin_border
-                c_cell.alignment = Alignment(horizontal="center" if c_idx in [1, 5] else "left", vertical="center")
-
-        gen_list_str = f'"{",".join(self.cat_general_options)}"'
-        dv_gen = DataValidation(type="list", formula1=gen_list_str, allow_blank=True)
-        ws.add_data_validation(dv_gen)
-        dv_gen.add(f"B2:B{max(100, excel_row_idx + 100)}")
-
-        spec_list_str = f'"{",".join(self.cat_specific_options)}"'
-        dv_spec = DataValidation(type="list", formula1=spec_list_str, allow_blank=True)
-        ws.add_data_validation(dv_spec)
-        dv_spec.add(f"C2:C{max(100, excel_row_idx + 100)}")
-
-        for val, (bg_hex, font_hex) in CATEGORY_COLORS.items():
-            bg_clean = bg_hex.replace("#", "")
-            font_clean = font_hex.replace("#", "")
-            chip_fill = PatternFill(start_color=bg_clean, end_color=bg_clean, fill_type="solid")
-            chip_font = Font(name="Segoe UI", size=10, bold=True, color=font_clean)
-            rule = CellIsRule(operator='equal', formula=[f'"{val}"'], fill=chip_fill, font=chip_font)
-            ws.conditional_formatting.add(f"B2:C{max(100, excel_row_idx + 100)}", rule)
-
-        wb.save(path)
         QMessageBox.information(self, "Export Complete", f"Exported successfully to:\n{path}")
 
 
