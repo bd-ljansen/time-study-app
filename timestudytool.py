@@ -298,6 +298,10 @@ class TimeColumnWidget(QWidget):
 
 
 class TimeStudyApp(QMainWindow):
+    # Tolerance for matching a decoded frame's actual timestamp to a row boundary; seeks
+    # can land a few ms before their target due to fps-quantized frame timestamps.
+    SEGMENT_BOUNDARY_EPSILON_MS = 150
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Multi-Video Time Study Logger - [Untitled Project]")
@@ -519,6 +523,10 @@ class TimeStudyApp(QMainWindow):
         current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
         group = self.active_group_item
         child_count = group.childCount()
+        # Seeks can land a few ms before their target (fps-quantized frame timestamps),
+        # so nudge forward before matching against row boundaries to avoid misclassifying
+        # the segment we're actually in.
+        query_ms = current_ms + self.SEGMENT_BOUNDARY_EPSILON_MS
         segment_index = 0
         segment_start_ms = 0
         for i in range(max(0, child_count - 1)):
@@ -526,7 +534,7 @@ class TimeStudyApp(QMainWindow):
             next_item = group.child(i + 1)
             ms1 = item.data(4, Qt.UserRole) or 0
             ms2 = next_item.data(4, Qt.UserRole) or 0
-            if ms1 <= current_ms < ms2:
+            if ms1 <= query_ms < ms2:
                 segment_index = i
                 segment_start_ms = ms1
                 break
@@ -534,7 +542,7 @@ class TimeStudyApp(QMainWindow):
             if child_count >= 2:
                 last_real_index = child_count - 2
                 last_ms = group.child(last_real_index).data(4, Qt.UserRole) or 0
-                if current_ms >= last_ms:
+                if query_ms >= last_ms:
                     segment_index = last_real_index
                     segment_start_ms = last_ms
 
@@ -561,13 +569,15 @@ class TimeStudyApp(QMainWindow):
         current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
         group = self.active_group_item
         child_count = group.childCount()
+        # See skip_to_segment_start for why we nudge forward before matching boundaries.
+        query_ms = current_ms + self.SEGMENT_BOUNDARY_EPSILON_MS
         segment_index = 0
         for i in range(max(0, child_count - 1)):
             item = group.child(i)
             next_item = group.child(i + 1)
             ms1 = item.data(4, Qt.UserRole) or 0
             ms2 = next_item.data(4, Qt.UserRole) or 0
-            if ms1 <= current_ms < ms2:
+            if ms1 <= query_ms < ms2:
                 segment_index = i
                 break
         else:
