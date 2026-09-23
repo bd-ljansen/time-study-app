@@ -1918,17 +1918,20 @@ class TimeStudyApp(QMainWindow):
             child_count = group.childCount()
             active_item = None
             if is_active_group:
+                # Match the epsilon used in skip_to_segment_start/skip_to_next_segment_start so the
+                # highlighted row always agrees with which segment navigation thinks we're in.
+                query_ms = pos_ms + self.SEGMENT_BOUNDARY_EPSILON_MS
                 for i in range(child_count - 1):
                     item = group.child(i)
                     next_item = group.child(i + 1)
                     ms1 = item.data(4, Qt.UserRole) or 0
                     ms2 = next_item.data(4, Qt.UserRole) or 0
-                    if ms1 <= pos_ms < ms2:
+                    if ms1 <= query_ms < ms2:
                         active_item = item
                         break
                 if not active_item and child_count > 0:
                     last_item = group.child(child_count - 1)
-                    if pos_ms >= (last_item.data(4, Qt.UserRole) or 0):
+                    if query_ms >= (last_item.data(4, Qt.UserRole) or 0):
                         active_item = last_item
 
             for i in range(child_count):
