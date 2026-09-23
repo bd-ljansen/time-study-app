@@ -548,21 +548,30 @@ class TimeStudyApp(QMainWindow):
         current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
         group = self.active_group_item
         child_count = group.childCount()
-        next_start_ms = None
+        segment_index = 0
         for i in range(max(0, child_count - 1)):
             item = group.child(i)
             next_item = group.child(i + 1)
+            ms1 = item.data(4, Qt.UserRole) or 0
             ms2 = next_item.data(4, Qt.UserRole) or 0
-            if ms2 > current_ms + 300:
-                next_start_ms = ms2
+            if ms1 <= current_ms < ms2:
+                segment_index = i
                 break
+        else:
+            if child_count >= 2:
+                segment_index = child_count - 2
 
-        if next_start_ms is not None:
+        # Always step to the immediately following row, never skipping closely-spaced segments
+        next_real_index = segment_index + 1
+        if next_real_index <= child_count - 2:
+            next_start_ms = group.child(next_real_index).data(4, Qt.UserRole) or 0
             self.seek_position(next_start_ms)
         else:
             idx = self.video_tree.indexOfTopLevelItem(group)
-            if idx >= 0 and idx + 1 < self.video_tree.topLevelItemCount():
-                self.switch_active_video(self.video_tree.topLevelItem(idx + 1), 0)
+            total_groups = self.video_tree.topLevelItemCount()
+            # Wrap around to the first video in the project if we're already on the last one
+            next_idx = idx + 1 if idx + 1 < total_groups else 0
+            self.switch_active_video(self.video_tree.topLevelItem(next_idx), 0)
         
     def _clear_custom_category_colors(self):
         for cat_name in self.custom_category_colors:
