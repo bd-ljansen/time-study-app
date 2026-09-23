@@ -1,0 +1,1 @@
+After every change, commit each individual change in a separate commit message. 
