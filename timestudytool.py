@@ -178,6 +178,7 @@ class JumpSlider(QSlider):
 class ZoomableVideoView(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         self.pixmap_item = QGraphicsPixmapItem()
@@ -435,11 +436,13 @@ class TimeStudyApp(QMainWindow):
         speeds = [1.0, 2.0, 4.0, 8.0]
         try:
             idx = speeds.index(self.playback_speed)
-            self.playback_speed = speeds[(idx + 1) % len(speeds)]
+            self.set_playback_speed(speeds[(idx + 1) % len(speeds)])
         except ValueError:
-            self.playback_speed = 1.0
-            
-        # UI update and adjust the timer interval based on speed
+            self.set_playback_speed(1.0)
+
+    def set_playback_speed(self, speed):
+        """Sets playback speed and updates its on-video control."""
+        self.playback_speed = speed
         self.speed_btn.setText(f"{int(self.playback_speed)}x")
         if self.fps > 0:
             # Keep interval locked to the natural FPS
@@ -759,6 +762,9 @@ class TimeStudyApp(QMainWindow):
 
             elif key == Qt.Key_Space:
                 self.toggle_play()
+                return True
+            elif focused is self.video_view and key in (Qt.Key_1, Qt.Key_2, Qt.Key_4, Qt.Key_8):
+                self.set_playback_speed(float(event.text()))
                 return True
             elif key == Qt.Key_T and self.view_mode == "video":
                 self.add_timestamp_row()
