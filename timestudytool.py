@@ -530,6 +530,29 @@ class TimeStudyApp(QMainWindow):
                 self.switch_active_video(self.video_tree.topLevelItem(idx - 1), 0)
             else:
                 self.seek_position(0)
+
+    def skip_to_next_segment_start(self):
+        """Ctrl+Right: jump to the start of the next segment. If there is none, jump to the start of the next video."""
+        if self.view_mode != "video" or not self.cap or not self.cap.isOpened() or not self.active_group_item:
+            return
+        current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
+        group = self.active_group_item
+        child_count = group.childCount()
+        next_start_ms = None
+        for i in range(max(0, child_count - 1)):
+            item = group.child(i)
+            next_item = group.child(i + 1)
+            ms2 = next_item.data(4, Qt.UserRole) or 0
+            if ms2 > current_ms + 300:
+                next_start_ms = ms2
+                break
+
+        if next_start_ms is not None:
+            self.seek_position(next_start_ms)
+        else:
+            idx = self.video_tree.indexOfTopLevelItem(group)
+            if idx >= 0 and idx + 1 < self.video_tree.topLevelItemCount():
+                self.switch_active_video(self.video_tree.topLevelItem(idx + 1), 0)
         
     def _clear_custom_category_colors(self):
         for cat_name in self.custom_category_colors:
@@ -680,6 +703,10 @@ class TimeStudyApp(QMainWindow):
 
             if key == Qt.Key_Left and (event.modifiers() & Qt.ControlModifier):
                 self.skip_to_segment_start()
+                return True
+
+            if key == Qt.Key_Right and (event.modifiers() & Qt.ControlModifier):
+                self.skip_to_next_segment_start()
                 return True
 
             if key in (Qt.Key_Left, Qt.Key_Right):
