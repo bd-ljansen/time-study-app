@@ -498,6 +498,38 @@ class TimeStudyApp(QMainWindow):
     def _perform_seek(self):
         """Executes the delayed seek."""
         self.seek_position(self.target_seek_ms)
+
+    def skip_to_segment_start(self):
+        """Ctrl+Left: jump to the start of the current segment. If already there, jump to the start of the previous video."""
+        if self.view_mode != "video" or not self.cap or not self.cap.isOpened() or not self.active_group_item:
+            return
+        current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
+        group = self.active_group_item
+        child_count = group.childCount()
+        segment_start_ms = 0
+        for i in range(max(0, child_count - 1)):
+            item = group.child(i)
+            next_item = group.child(i + 1)
+            ms1 = item.data(4, Qt.UserRole) or 0
+            ms2 = next_item.data(4, Qt.UserRole) or 0
+            if ms1 <= current_ms < ms2:
+                segment_start_ms = ms1
+                break
+        else:
+            if child_count > 0:
+                last_item = group.child(child_count - 1)
+                last_ms = last_item.data(4, Qt.UserRole) or 0
+                if current_ms >= last_ms:
+                    segment_start_ms = last_ms
+
+        if current_ms - segment_start_ms > 300:
+            self.seek_position(segment_start_ms)
+        else:
+            idx = self.video_tree.indexOfTopLevelItem(group)
+            if idx > 0:
+                self.switch_active_video(self.video_tree.topLevelItem(idx - 1), 0)
+            else:
+                self.seek_position(0)
         
     def _clear_custom_category_colors(self):
         for cat_name in self.custom_category_colors:
@@ -645,6 +677,10 @@ class TimeStudyApp(QMainWindow):
                     self.commit_time_edit(self.time_editing_item)
                     self.set_time_edit_mode(None)
                     return True
+
+            if key == Qt.Key_Left and (event.modifiers() & Qt.ControlModifier):
+                self.skip_to_segment_start()
+                return True
 
             if key in (Qt.Key_Left, Qt.Key_Right):
                 self.step_time(-1000 if key == Qt.Key_Left else 1000)
