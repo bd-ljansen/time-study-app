@@ -526,14 +526,14 @@ class TimeStudyApp(QMainWindow):
             self.seek_position(segment_start_ms)
         else:
             idx = self.video_tree.indexOfTopLevelItem(group)
-            if idx > 0:
-                prev_group = self.video_tree.topLevelItem(idx - 1)
-                prev_child_count = prev_group.childCount()
-                # Last real segment start (excludes the END VIDEO sentinel row)
-                last_segment_start_ms = prev_group.child(prev_child_count - 2).data(4, Qt.UserRole) or 0 if prev_child_count >= 2 else 0
-                self.switch_active_video(prev_group, last_segment_start_ms)
-            else:
-                self.seek_position(0)
+            total_groups = self.video_tree.topLevelItemCount()
+            # Wrap around to the last video in the project if we're already on the first one
+            prev_idx = idx - 1 if idx > 0 else total_groups - 1
+            prev_group = self.video_tree.topLevelItem(prev_idx)
+            prev_child_count = prev_group.childCount()
+            # Last real segment start (excludes the END VIDEO sentinel row)
+            last_segment_start_ms = prev_group.child(prev_child_count - 2).data(4, Qt.UserRole) or 0 if prev_child_count >= 2 else 0
+            self.switch_active_video(prev_group, last_segment_start_ms)
 
     def skip_to_next_segment_start(self):
         """Ctrl+Right: jump to the start of the next segment. If there is none, jump to the start of the next video."""
