@@ -460,23 +460,36 @@ class TimeStudyApp(QMainWindow):
             self.add_video_group(file_path)
 
     def seek_position(self, ms):
-        """Jumps to a specific timestamp in the video."""
+        """Jumps to a specific timestamp in the video, correcting for keyframe-snap seek imprecision."""
         if self.cap and self.cap.isOpened():
-            self.cap.set(cv2.CAP_PROP_POS_MSEC, ms)
+            target_ms = max(0, ms)
+            self.cap.set(cv2.CAP_PROP_POS_MSEC, target_ms)
             ret, frame = self.cap.read()
             if ret:
+                # Sparse-keyframe sources (e.g. GoPro proxy files) can land the decoder
+                # well before the requested time; step forward until we reach it for real.
+                actual_ms = self.cap.get(cv2.CAP_PROP_POS_MSEC)
+                frame_duration_ms = (1000.0 / self.fps) if self.fps else 33.0
+                guard = 0
+                while actual_ms < target_ms - frame_duration_ms and guard < 300:
+                    ret2, next_frame = self.cap.read()
+                    if not ret2:
+                        break
+                    frame = next_frame
+                    actual_ms = self.cap.get(cv2.CAP_PROP_POS_MSEC)
+                    guard += 1
+
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 h, w, ch = frame.shape
                 q_img = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888)
                 self.video_view.set_frame(QPixmap.fromImage(q_img))
-                
-                # REPLACED: Removed the redundant self.cap.set() here
-                
+
+                display_ms = int(actual_ms)
                 self.slider.blockSignals(True)
-                self.slider.setValue(int(ms))
+                self.slider.setValue(display_ms)
                 self.slider.blockSignals(False)
-                
-                self.time_label.setText(f"{self.format_ms(ms)} / {self.format_ms(self.duration_ms)} (◄ / ► Arrow Keys = ±1s)")
+
+                self.time_label.setText(f"{self.format_ms(display_ms)} / {self.format_ms(self.duration_ms)} (◄ / ► Arrow Keys = ±1s)")
                 self.refresh_playback_ui()
 
     def step_time(self, delta_ms):
