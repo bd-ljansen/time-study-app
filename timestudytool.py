@@ -1876,12 +1876,12 @@ class TimeStudyApp(QMainWindow):
             play_btn.clicked.connect(on_play)
 
         if on_jump:
-            jump_btn = QPushButton("↹")
+            jump_btn = QPushButton("↪")
             jump_btn.setFocusPolicy(Qt.NoFocus)
             jump_btn.setToolTip("Jump to this row in the other view mode")
             jump_btn.setStyleSheet("""
-                QPushButton { border: none; background-color: transparent; color: #8B5CF6; font-size: 16px; font-weight: bold; padding: 2px 4px; border-radius: 4px; }
-                QPushButton:hover { background-color: rgba(139, 92, 246, 0.15); color: #7C3AED; }
+                QPushButton { border: none; background-color: transparent; color: #000000; font-size: 16px; font-weight: bold; padding: 2px 4px; border-radius: 4px; }
+                QPushButton:hover { background-color: rgba(0, 0, 0, 0.08); color: #000000; }
             """)
             layout.addWidget(jump_btn)
             widget.jump_btn = jump_btn
