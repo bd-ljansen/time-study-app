@@ -298,10 +298,6 @@ class TimeColumnWidget(QWidget):
 
 
 class TimeStudyApp(QMainWindow):
-    # Tolerance for matching a decoded frame's actual timestamp to a row boundary; seeks
-    # can land a few ms before their target due to fps-quantized frame timestamps.
-    SEGMENT_BOUNDARY_EPSILON_MS = 150
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Multi-Video Time Study Logger - [Untitled Project]")
@@ -516,6 +512,12 @@ class TimeStudyApp(QMainWindow):
         """Executes the delayed seek."""
         self.seek_position(self.target_seek_ms)
 
+    def _segment_boundary_epsilon_ms(self):
+        """~1 frame of tolerance so fps-quantized frame timestamps don't misclassify a row boundary,
+        without being large enough to noticeably pre-empt row switching during normal playback."""
+        frame_duration_ms = (1000.0 / self.fps) if self.fps else 33.0
+        return frame_duration_ms + 10
+
     def skip_to_segment_start(self):
         """Ctrl+Left: jump to the start of the current segment. If already there, jump to the segment immediately prior."""
         if self.view_mode != "video" or not self.cap or not self.cap.isOpened() or not self.active_group_item:
@@ -526,7 +528,7 @@ class TimeStudyApp(QMainWindow):
         # Seeks can land a few ms before their target (fps-quantized frame timestamps),
         # so nudge forward before matching against row boundaries to avoid misclassifying
         # the segment we're actually in.
-        query_ms = current_ms + self.SEGMENT_BOUNDARY_EPSILON_MS
+        query_ms = current_ms + self._segment_boundary_epsilon_ms()
         segment_index = 0
         segment_start_ms = 0
         for i in range(max(0, child_count - 1)):
@@ -570,7 +572,7 @@ class TimeStudyApp(QMainWindow):
         group = self.active_group_item
         child_count = group.childCount()
         # See skip_to_segment_start for why we nudge forward before matching boundaries.
-        query_ms = current_ms + self.SEGMENT_BOUNDARY_EPSILON_MS
+        query_ms = current_ms + self._segment_boundary_epsilon_ms()
         segment_index = 0
         for i in range(max(0, child_count - 1)):
             item = group.child(i)
@@ -1920,7 +1922,7 @@ class TimeStudyApp(QMainWindow):
             if is_active_group:
                 # Match the epsilon used in skip_to_segment_start/skip_to_next_segment_start so the
                 # highlighted row always agrees with which segment navigation thinks we're in.
-                query_ms = pos_ms + self.SEGMENT_BOUNDARY_EPSILON_MS
+                query_ms = pos_ms + self._segment_boundary_epsilon_ms()
                 for i in range(child_count - 1):
                     item = group.child(i)
                     next_item = group.child(i + 1)
