@@ -500,7 +500,7 @@ class TimeStudyApp(QMainWindow):
         self.seek_position(self.target_seek_ms)
 
     def skip_to_segment_start(self):
-        """Ctrl+Left: jump to the start of the current segment. If already there, jump to the start of the previous video."""
+        """Ctrl+Left: jump to the start of the current segment. If already there, jump to the start of the last segment of the previous video."""
         if self.view_mode != "video" or not self.cap or not self.cap.isOpened() or not self.active_group_item:
             return
         current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
@@ -527,7 +527,11 @@ class TimeStudyApp(QMainWindow):
         else:
             idx = self.video_tree.indexOfTopLevelItem(group)
             if idx > 0:
-                self.switch_active_video(self.video_tree.topLevelItem(idx - 1), 0)
+                prev_group = self.video_tree.topLevelItem(idx - 1)
+                prev_child_count = prev_group.childCount()
+                # Last real segment start (excludes the END VIDEO sentinel row)
+                last_segment_start_ms = prev_group.child(prev_child_count - 2).data(4, Qt.UserRole) or 0 if prev_child_count >= 2 else 0
+                self.switch_active_video(prev_group, last_segment_start_ms)
             else:
                 self.seek_position(0)
 
