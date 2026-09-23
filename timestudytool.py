@@ -500,12 +500,13 @@ class TimeStudyApp(QMainWindow):
         self.seek_position(self.target_seek_ms)
 
     def skip_to_segment_start(self):
-        """Ctrl+Left: jump to the start of the current segment. If already there, jump to the start of the last segment of the previous video."""
+        """Ctrl+Left: jump to the start of the current segment. If already there, jump to the segment immediately prior."""
         if self.view_mode != "video" or not self.cap or not self.cap.isOpened() or not self.active_group_item:
             return
         current_ms = int(self.target_seek_ms if self.seek_timer.isActive() else self.cap.get(cv2.CAP_PROP_POS_MSEC))
         group = self.active_group_item
         child_count = group.childCount()
+        segment_index = 0
         segment_start_ms = 0
         for i in range(max(0, child_count - 1)):
             item = group.child(i)
@@ -513,17 +514,22 @@ class TimeStudyApp(QMainWindow):
             ms1 = item.data(4, Qt.UserRole) or 0
             ms2 = next_item.data(4, Qt.UserRole) or 0
             if ms1 <= current_ms < ms2:
+                segment_index = i
                 segment_start_ms = ms1
                 break
         else:
-            if child_count > 0:
-                last_item = group.child(child_count - 1)
-                last_ms = last_item.data(4, Qt.UserRole) or 0
+            if child_count >= 2:
+                last_real_index = child_count - 2
+                last_ms = group.child(last_real_index).data(4, Qt.UserRole) or 0
                 if current_ms >= last_ms:
+                    segment_index = last_real_index
                     segment_start_ms = last_ms
 
         if current_ms - segment_start_ms > 300:
             self.seek_position(segment_start_ms)
+        elif segment_index > 0:
+            prev_segment_start_ms = group.child(segment_index - 1).data(4, Qt.UserRole) or 0
+            self.seek_position(prev_segment_start_ms)
         else:
             idx = self.video_tree.indexOfTopLevelItem(group)
             total_groups = self.video_tree.topLevelItemCount()
