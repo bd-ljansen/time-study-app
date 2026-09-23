@@ -17,8 +17,8 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
     QMenu, QProgressDialog, QStackedWidget, QSplitter
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect
-from PyQt5.QtGui import QImage, QPixmap, QColor, QBrush, QFont, QPainter
+from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QSize
+from PyQt5.QtGui import QImage, QPixmap, QColor, QBrush, QFont, QPainter, QIcon
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECTS_DIR = os.path.join(SCRIPT_DIR, "Projects")
@@ -1888,10 +1888,13 @@ class TimeStudyApp(QMainWindow):
             jump_btn.clicked.connect(on_jump)
 
         if on_delete:
-            del_btn = QPushButton("🗑")
+            del_btn = QPushButton()
             del_btn.setFocusPolicy(Qt.NoFocus)
+            del_btn.setIcon(QIcon(os.path.join(SCRIPT_DIR, "trashcan.svg")))
+            del_btn.setIconSize(QSize(18, 20))
+            del_btn.setFixedSize(24, 24)
             del_btn.setToolTip("Delete item / video group")
-            del_btn.setStyleSheet("QPushButton { border: none; background-color: transparent; color: #DC2626; font-size: 14px; padding: 2px 4px; border-radius: 4px; } QPushButton:hover { background-color: rgba(220, 38, 38, 0.15); color: #991B1B; }")
+            del_btn.setStyleSheet("QPushButton { border: none; background-color: transparent; padding: 2px; border-radius: 4px; } QPushButton:hover { background-color: transparent; }")
             del_btn.clicked.connect(on_delete)
             layout.addWidget(del_btn)
         return widget
