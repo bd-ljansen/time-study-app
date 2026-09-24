@@ -476,6 +476,9 @@ class TimeStudyApp(QMainWindow):
         self.view_mode = "video"
         self.saved_video_state = []
         self.active_category_item = None
+        # Last (group index, row index) selected in each tree, so mode switches return to the same row.
+        self.last_video_selection = None
+        self.last_category_selection = None
         # Mirrors the source spreadsheet's Pareto query, which drops Break and Other.
         self.pareto_excluded_cats = {"Break", "Other"}
 
@@ -1221,7 +1224,63 @@ class TimeStudyApp(QMainWindow):
         splitter.setStretchFactor(1, 5)
         main_layout.addWidget(splitter)
 
+    def _capture_mode_selection(self):
+        """Remember which row was selected in the tree we're leaving."""
+        if not hasattr(self, 'video_tree'):
+            return
+        if self.view_mode == "video":
+            item = self.video_tree.currentItem()
+            if item and item.parent():
+                parent = item.parent()
+                self.last_video_selection = (
+                    self.video_tree.indexOfTopLevelItem(parent),
+                    parent.indexOfChild(item)
+                )
+        elif self.view_mode == "category":
+            item = self.category_tree.currentItem()
+            if item is not None and getattr(item, 'g_idx', -1) >= 0:
+                self.last_category_selection = (item.g_idx, item.r_idx)
+
+    def _restore_video_selection(self):
+        if not self.last_video_selection or self.video_tree.topLevelItemCount() == 0:
+            return
+        g_idx, r_idx = self.last_video_selection
+        grp = self.video_tree.topLevelItem(min(g_idx, self.video_tree.topLevelItemCount() - 1))
+        segment_count = max(0, grp.childCount() - 1)  # last child is the END VIDEO sentinel
+        if segment_count == 0:
+            target = grp
+        else:
+            grp.setExpanded(True)
+            target = grp.child(max(0, min(r_idx, segment_count - 1)))
+        self.video_tree.setCurrentItem(target)
+        self.video_tree.scrollToItem(target)
+
+    def _restore_category_selection(self):
+        if not self.last_category_selection:
+            return
+        g_idx, r_idx = self.last_category_selection
+        best = None
+        best_distance = None
+        for i in range(self.category_tree.topLevelItemCount()):
+            cat_grp = self.category_tree.topLevelItem(i)
+            for c in range(cat_grp.childCount()):
+                child = cat_grp.child(c)
+                if getattr(child, 'g_idx', -1) != g_idx:
+                    continue
+                distance = abs(getattr(child, 'r_idx', 0) - r_idx)
+                if best_distance is None or distance < best_distance:
+                    best, best_distance = child, distance
+                    if distance == 0:
+                        break
+            if best_distance == 0:
+                break
+        if best is None:
+            return
+        self.category_tree.setCurrentItem(best)
+        self.category_tree.scrollToItem(best)
+
     def toggle_view_mode(self, index):
+        self._capture_mode_selection()
         if index == 2:
             if self.view_mode == "video":
                 self.saved_video_state = self.get_current_state()
@@ -1268,6 +1327,7 @@ class TimeStudyApp(QMainWindow):
             
             self.build_category_view()
             self.stacked_widget.setCurrentIndex(1)
+            self._restore_category_selection()
         else:
             self.view_mode = "video"
             self.timer.stop()
@@ -1289,6 +1349,7 @@ class TimeStudyApp(QMainWindow):
             self.expand_btn.setVisible(True)
             
             self.stacked_widget.setCurrentIndex(0)
+            self._restore_video_selection()
             self.update_undo_redo_actions()
 
     def get_pareto_category_totals(self):
