@@ -1067,7 +1067,7 @@ class TimeStudyApp(QMainWindow):
         table_controls = QHBoxLayout()
 
         self.view_mode_combo = QComboBox()
-        self.view_mode_combo.addItems(["📹 Video Mode", "📁 Category Mode", "📊 Pareto Mode"])
+        self.view_mode_combo.addItems(["🕒 Chronological Mode", "📁 Category Mode", "📊 Pareto Mode"])
         self.view_mode_combo.setFocusPolicy(Qt.NoFocus)
         self.view_mode_combo.setStyleSheet("""
             QComboBox {
