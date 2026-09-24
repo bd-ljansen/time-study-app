@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QGraphicsPixmapItem, QLineEdit, QTextEdit, QMessageBox, QAction,
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
     QMenu, QProgressDialog, QStackedWidget, QSplitter, QListWidget, QListWidgetItem,
-    QGroupBox, QSizePolicy
+    QGroupBox, QSizePolicy, QButtonGroup
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF
 from PyQt5.QtGui import (
@@ -1102,18 +1102,48 @@ class TimeStudyApp(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         table_controls = QHBoxLayout()
 
-        self.view_mode_combo = QComboBox()
-        self.view_mode_combo.addItems(["🕒 Chronological Mode", "📁 Category Mode", "📊 Pareto Mode"])
-        self.view_mode_combo.setFocusPolicy(Qt.NoFocus)
-        self.view_mode_combo.setStyleSheet("""
-            QComboBox {
-                font-weight: bold; font-size: 14px;
-                padding: 4px 10px; border-radius: 4px;
-                border: 1px solid #CBD5E1; background: #FFFFFF;
+        tabs_container = QWidget()
+        tabs_layout = QHBoxLayout(tabs_container)
+        tabs_layout.setContentsMargins(0, 0, 0, 0)
+        tabs_layout.setSpacing(-1)  # overlap borders so tabs look connected like Chrome tabs
+
+        TAB_BTN_STYLE = """
+            QPushButton {
+                background-color: #E5E7EB;
+                border: 1px solid #CBD5E1;
+                border-bottom: none;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                padding: 6px 16px;
+                font-weight: bold;
+                font-size: 14px;
+                color: #6B7280;
             }
-        """)
-        self.view_mode_combo.currentIndexChanged.connect(self.toggle_view_mode)
-        table_controls.addWidget(self.view_mode_combo)
+            QPushButton:checked {
+                background-color: #FFFFFF;
+                color: #111827;
+                border: 1px solid #2b7cff;
+                border-bottom: 2px solid #FFFFFF;
+            }
+            QPushButton:hover:!checked {
+                background-color: #F1F5F9;
+            }
+        """
+
+        self.view_mode_group = QButtonGroup(self)
+        self.view_mode_group.setExclusive(True)
+        self.view_mode_buttons = []
+        for i, label in enumerate(["🕒 Chronological Mode", "📁 Category Mode", "📊 Pareto Mode"]):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setFocusPolicy(Qt.NoFocus)
+            btn.setStyleSheet(TAB_BTN_STYLE)
+            self.view_mode_group.addButton(btn, i)
+            self.view_mode_buttons.append(btn)
+            tabs_layout.addWidget(btn)
+        self.view_mode_buttons[0].setChecked(True)
+        self.view_mode_group.idClicked.connect(self.toggle_view_mode)
+        table_controls.addWidget(tabs_container)
 
         self.proj_status_label = QLabel("Project: Unsaved")
         self.proj_status_label.setStyleSheet("color: #888; font-style: italic; margin-left: 10px;")
@@ -1313,7 +1343,12 @@ class TimeStudyApp(QMainWindow):
         self.category_tree.scrollToItem(best)
 
     def toggle_view_mode(self, index):
+        target_mode = ("video", "category", "pareto")[index]
+        if self.view_mode == target_mode:
+            self.view_mode_buttons[index].setChecked(True)
+            return
         self._capture_mode_selection()
+        self.view_mode_buttons[index].setChecked(True)
         if index == 2:
             if self.view_mode == "video":
                 self.saved_video_state = self.get_current_state()
@@ -1570,7 +1605,7 @@ class TimeStudyApp(QMainWindow):
         g_idx = self.video_tree.indexOfTopLevelItem(video_item.parent())
         r_idx = video_item.parent().indexOfChild(video_item)
         
-        self.view_mode_combo.setCurrentIndex(1)
+        self.toggle_view_mode(1)
         for i in range(self.category_tree.topLevelItemCount()):
             cat_grp = self.category_tree.topLevelItem(i)
             for c in range(cat_grp.childCount()):
@@ -1585,7 +1620,7 @@ class TimeStudyApp(QMainWindow):
         g_idx = getattr(category_item, 'g_idx', -1)
         r_idx = getattr(category_item, 'r_idx', -1)
         if g_idx >= 0 and r_idx >= 0:
-            self.view_mode_combo.setCurrentIndex(0)
+            self.toggle_view_mode(0)
             if g_idx < self.video_tree.topLevelItemCount():
                 grp = self.video_tree.topLevelItem(g_idx)
                 grp.setExpanded(True)
@@ -2809,7 +2844,7 @@ class TimeStudyApp(QMainWindow):
 
         path, _ = QFileDialog.getOpenFileName(self, "Open Project", self._default_browse_dir(), "Time Study Project (*.tsproject *.json);;All Files (*)")
         if not path: return
-        self.view_mode_combo.setCurrentIndex(0)
+        self.toggle_view_mode(0)
         progress = QProgressDialog(self)
         progress.setWindowTitle("Loading")
         progress.setLabelText("Loading Project File...")
@@ -2872,7 +2907,7 @@ class TimeStudyApp(QMainWindow):
     def import_project_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Project File", self._default_browse_dir(), "Time Study Project (*.tsproject *.json);;All Files (*)")
         if not path: return
-        self.view_mode_combo.setCurrentIndex(0)
+        self.toggle_view_mode(0)
         progress = QProgressDialog(self)
         progress.setWindowTitle("Importing")
         progress.setLabelText("Parsing Project File...")
