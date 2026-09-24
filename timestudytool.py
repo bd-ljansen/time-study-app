@@ -773,6 +773,33 @@ class TimeStudyApp(QMainWindow):
             # Wrap around to the first video in the project if we're already on the last one
             next_idx = idx + 1 if idx + 1 < total_groups else 0
             self.switch_active_video(self.video_tree.topLevelItem(next_idx), 0)
+
+    def skip_to_category_segment_start(self):
+        """Ctrl+Left: restart the current category slice, then move to the preceding category segment."""
+        item = self.active_category_item
+        if not item or not self.cap or not self.cap.isOpened():
+            return
+
+        slices = getattr(item, "category_slices", [])
+        slice_index = getattr(item, "category_slice_index", 0)
+        start_ms = slices[slice_index]["start_ms"] if slices else (item.data(1, Qt.UserRole) or 0)
+        current_ms = self.cap.get(cv2.CAP_PROP_POS_MSEC)
+        if current_ms - start_ms > self._segment_boundary_epsilon_ms():
+            self.seek_position(start_ms)
+            return
+
+        previous_item = self.get_previous_category_segment(item)
+        if previous_item:
+            self.play_category_segment(previous_item)
+
+    def skip_to_next_category_segment_start(self):
+        """Ctrl+Right: start the following displayed category segment."""
+        item = self.active_category_item
+        if not item:
+            return
+        next_item = self.get_next_category_segment(item)
+        if next_item:
+            self.play_category_segment(next_item)
         
     def _clear_custom_category_colors(self):
         for cat_name in self.custom_category_colors:
@@ -922,11 +949,17 @@ class TimeStudyApp(QMainWindow):
                     return True
 
             if key == Qt.Key_Left and (event.modifiers() & Qt.ControlModifier):
-                self.skip_to_segment_start()
+                if self.view_mode == "category":
+                    self.skip_to_category_segment_start()
+                else:
+                    self.skip_to_segment_start()
                 return True
 
             if key == Qt.Key_Right and (event.modifiers() & Qt.ControlModifier):
-                self.skip_to_next_segment_start()
+                if self.view_mode == "category":
+                    self.skip_to_next_category_segment_start()
+                else:
+                    self.skip_to_next_segment_start()
                 return True
 
             if key in (Qt.Key_Left, Qt.Key_Right):
@@ -1708,6 +1741,21 @@ class TimeStudyApp(QMainWindow):
             p_idx = self.category_tree.indexOfTopLevelItem(parent)
             if p_idx + 1 < self.category_tree.topLevelItemCount():
                 return self.category_tree.topLevelItem(p_idx + 1).child(0)
+        return None
+
+    def get_previous_category_segment(self, current_item):
+        parent = current_item.parent()
+        if not parent:
+            return None
+        idx = parent.indexOfChild(current_item)
+        if idx > 0:
+            return parent.child(idx - 1)
+
+        p_idx = self.category_tree.indexOfTopLevelItem(parent)
+        if p_idx > 0:
+            previous_parent = self.category_tree.topLevelItem(p_idx - 1)
+            if previous_parent.childCount() > 0:
+                return previous_parent.child(previous_parent.childCount() - 1)
         return None
 
     def create_category_combo(self, item, cat_type, current_text):
