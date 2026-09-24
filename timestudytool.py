@@ -1,6 +1,7 @@
 import sys
 import csv
 import json
+import math
 import os
 import random
 import cv2
@@ -15,10 +16,14 @@ from PyQt5.QtWidgets import (
     QLabel, QHeaderView, QComboBox, QGraphicsView, QGraphicsScene, 
     QGraphicsPixmapItem, QLineEdit, QTextEdit, QMessageBox, QAction,
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
-    QMenu, QProgressDialog, QStackedWidget, QSplitter
+    QMenu, QProgressDialog, QStackedWidget, QSplitter, QListWidget, QListWidgetItem,
+    QGroupBox, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect
-from PyQt5.QtGui import QImage, QPixmap, QColor, QBrush, QFont, QPainter
+from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF
+from PyQt5.QtGui import (
+    QImage, QPixmap, QColor, QBrush, QFont, QPainter, QPen, QPolygonF,
+    QFontMetrics
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECTS_DIR = os.path.join(SCRIPT_DIR, "Projects")
@@ -259,7 +264,7 @@ class MultiVideoTreeWidget(QTreeWidget):
         self.setItemDelegate(ExcelDelegate(self))
 
     def dropEvent(self, event):
-        if self.app.view_mode == "category":
+        if self.app.view_mode != "video":
             event.ignore()
             return
             
@@ -298,6 +303,161 @@ class TimeColumnWidget(QWidget):
         painter.end()
 
 
+class ParetoChartWidget(QWidget):
+    """Pareto chart matching the Excel/Sheets combo-chart format.
+
+    Bars = total delta per category (left axis, seconds), descending.
+    Line = running cumulative percent of the charted total (right axis).
+    """
+
+    BAR_COLOR = "#4F81BD"       # theme accent1 used by the source workbook
+    LINE_COLOR = "#C0504D"      # theme accent2
+    GRID_COLOR = "#B7B7B7"
+    TEXT_COLOR = "#000000"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.data = []  # list of (category, total_seconds, cumulative_fraction)
+        self.title = "Time Delay by Motion Category"
+        self.x_title = "Motion Category"
+        self.y_title = "Time Difference [s]"
+        self.setMinimumHeight(360)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAutoFillBackground(True)
+        pal = self.palette()
+        pal.setColor(self.backgroundRole(), QColor("#FFFFFF"))
+        self.setPalette(pal)
+
+    def set_data(self, data, title=None):
+        self.data = list(data)
+        if title:
+            self.title = title
+        self.update()
+
+    @staticmethod
+    def _nice_axis_max(value, tick_count=5):
+        if value <= 0:
+            return 1.0, 1.0 / tick_count
+        raw_step = value / tick_count
+        magnitude = 10 ** math.floor(math.log10(raw_step))
+        for mult in (1, 2, 2.5, 5, 10):
+            step = mult * magnitude
+            if step >= raw_step:
+                break
+        return step * tick_count, step
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#FFFFFF"))
+
+        if not self.data:
+            painter.setPen(QColor("#94A3B8"))
+            painter.setFont(QFont("Segoe UI", 12))
+            painter.drawText(self.rect(), Qt.AlignCenter,
+                             "No category data to chart.\nLoad or open a project first.")
+            return
+
+        w, h = self.width(), self.height()
+        title_font = QFont("Segoe UI", 13)
+        axis_title_font = QFont("Segoe UI", 10, QFont.Bold)
+        tick_font = QFont("Segoe UI", 9)
+
+        # Title
+        painter.setFont(title_font)
+        painter.setPen(QColor(self.TEXT_COLOR))
+        painter.drawText(QRectF(0, 8, w, 26), Qt.AlignCenter, self.title)
+
+        # Reserve room for the rotated category labels along the bottom.
+        fm_tick = QFontMetrics(tick_font)
+        longest = max((fm_tick.width(str(c)) for c, _, _ in self.data), default=0)
+        label_band = min(150, int(longest * 0.72) + 12)
+
+        left = 78
+        right = w - 82
+        top = 46
+        bottom = h - (label_band + 34)
+        if right - left < 60 or bottom - top < 60:
+            return
+        plot = QRectF(left, top, right - left, bottom - top)
+
+        max_val = max(v for _, v, _ in self.data)
+        y_max, y_step = self._nice_axis_max(max_val)
+
+        # Horizontal gridlines + left (seconds) and right (percent) tick labels
+        painter.setFont(tick_font)
+        tick_count = int(round(y_max / y_step))
+        for i in range(tick_count + 1):
+            frac = i / tick_count
+            y = bottom - frac * plot.height()
+            painter.setPen(QPen(QColor(self.GRID_COLOR), 1))
+            painter.drawLine(QPointF(left, y), QPointF(right, y))
+            painter.setPen(QColor(self.TEXT_COLOR))
+            painter.drawText(QRectF(left - 72, y - 9, 66, 18),
+                             Qt.AlignRight | Qt.AlignVCenter, self._fmt_seconds(y_step * i))
+            painter.drawText(QRectF(right + 6, y - 9, 70, 18),
+                             Qt.AlignLeft | Qt.AlignVCenter, f"{frac * 100:.2f}%")
+
+        # Axis lines
+        painter.setPen(QPen(QColor("#1A1A1A"), 1))
+        painter.drawLine(QPointF(left, top), QPointF(left, bottom))
+        painter.drawLine(QPointF(left, bottom), QPointF(right, bottom))
+        painter.drawLine(QPointF(right, top), QPointF(right, bottom))
+
+        # Bars
+        n = len(self.data)
+        slot = plot.width() / n
+        bar_w = slot * 0.62
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(self.BAR_COLOR))
+        for i, (_, val, _) in enumerate(self.data):
+            bar_h = (val / y_max) * plot.height() if y_max else 0
+            x = left + slot * i + (slot - bar_w) / 2
+            painter.drawRect(QRectF(x, bottom - bar_h, bar_w, bar_h))
+
+        # Cumulative percent line (right axis 0-100%)
+        points = [QPointF(left + slot * (i + 0.5), bottom - cum * plot.height())
+                  for i, (_, _, cum) in enumerate(self.data)]
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(self.LINE_COLOR), 2))
+        painter.drawPolyline(QPolygonF(points))
+        painter.setBrush(QColor(self.LINE_COLOR))
+        painter.setPen(Qt.NoPen)
+        for p in points:
+            painter.drawEllipse(p, 3.2, 3.2)
+
+        # Rotated category labels
+        painter.setFont(tick_font)
+        painter.setPen(QColor(self.TEXT_COLOR))
+        for i, (cat, _, _) in enumerate(self.data):
+            painter.save()
+            painter.translate(left + slot * (i + 0.5), bottom + 8)
+            painter.rotate(-45)
+            painter.drawText(QRectF(-label_band - 10, -9, label_band + 4, 18),
+                             Qt.AlignRight | Qt.AlignVCenter, str(cat))
+            painter.restore()
+
+        # Axis titles
+        painter.setFont(axis_title_font)
+        painter.drawText(QRectF(left, h - 26, plot.width(), 20), Qt.AlignCenter, self.x_title)
+        painter.save()
+        painter.translate(18, (top + bottom) / 2)
+        painter.rotate(-90)
+        painter.drawText(QRectF(-plot.height() / 2, -10, plot.height(), 20),
+                         Qt.AlignCenter, self.y_title)
+        painter.restore()
+        painter.save()
+        painter.translate(w - 14, (top + bottom) / 2)
+        painter.rotate(-90)
+        painter.drawText(QRectF(-plot.height() / 2, -10, plot.height(), 20),
+                         Qt.AlignCenter, "Running Percent")
+        painter.restore()
+
+    @staticmethod
+    def _fmt_seconds(value):
+        return f"{value:.0f}" if value >= 10 or value == 0 else f"{value:.1f}"
+
+
 class TimeStudyApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -308,6 +468,8 @@ class TimeStudyApp(QMainWindow):
         self.view_mode = "video"
         self.saved_video_state = []
         self.active_category_item = None
+        # Mirrors the source spreadsheet's Pareto query, which drops Break and Other.
+        self.pareto_excluded_cats = {"Break", "Other"}
 
         self.cap = None
         self.active_video_path = ""
@@ -897,7 +1059,7 @@ class TimeStudyApp(QMainWindow):
         table_controls = QHBoxLayout()
 
         self.view_mode_combo = QComboBox()
-        self.view_mode_combo.addItems(["📹 Video Mode", "📁 Category Mode"])
+        self.view_mode_combo.addItems(["📹 Video Mode", "📁 Category Mode", "📊 Pareto Mode"])
         self.view_mode_combo.setFocusPolicy(Qt.NoFocus)
         self.view_mode_combo.setStyleSheet("""
             QComboBox {
@@ -1001,6 +1163,47 @@ class TimeStudyApp(QMainWindow):
         self.category_tree.setColumnWidth(3, 160)
         self.stacked_widget.addWidget(self.category_tree)
 
+        # ---------- Pareto Mode Page ----------
+        self.pareto_page = QWidget()
+        pareto_layout = QHBoxLayout(self.pareto_page)
+        pareto_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.pareto_chart = ParetoChartWidget()
+        self.pareto_chart.setStyleSheet("border: 1px solid #CCCCCC;")
+        pareto_layout.addWidget(self.pareto_chart, 4)
+
+        exclude_box = QGroupBox("Categories in Pareto")
+        exclude_box.setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; margin-top: 6px; }")
+        exclude_layout = QVBoxLayout(exclude_box)
+
+        hint = QLabel("Uncheck a category to remove it from the Pareto.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #64748B; font-weight: normal; font-size: 12px;")
+        exclude_layout.addWidget(hint)
+
+        self.pareto_exclude_list = QListWidget()
+        self.pareto_exclude_list.setStyleSheet(
+            "QListWidget { background-color: #F4F5F7; border: 1px solid #CBD5E1; font-size: 13px; }"
+            "QListWidget::item { padding: 3px 4px; }"
+        )
+        self.pareto_exclude_list.itemChanged.connect(self.on_pareto_exclusion_changed)
+        exclude_layout.addWidget(self.pareto_exclude_list)
+
+        exclude_btns = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setFocusPolicy(Qt.NoFocus)
+        select_all_btn.clicked.connect(lambda: self.set_all_pareto_categories(True))
+        exclude_btns.addWidget(select_all_btn)
+        clear_all_btn = QPushButton("Clear All")
+        clear_all_btn.setFocusPolicy(Qt.NoFocus)
+        clear_all_btn.clicked.connect(lambda: self.set_all_pareto_categories(False))
+        exclude_btns.addWidget(clear_all_btn)
+        exclude_layout.addLayout(exclude_btns)
+
+        exclude_box.setMaximumWidth(280)
+        pareto_layout.addWidget(exclude_box, 1)
+        self.stacked_widget.addWidget(self.pareto_page)
+
         right_layout.addWidget(self.stacked_widget)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -1011,8 +1214,31 @@ class TimeStudyApp(QMainWindow):
         main_layout.addWidget(splitter)
 
     def toggle_view_mode(self, index):
-        if index == 1:
-            self.saved_video_state = self.get_current_state()
+        if index == 2:
+            if self.view_mode == "video":
+                self.saved_video_state = self.get_current_state()
+            self.view_mode = "pareto"
+            self.timer.stop()
+            self.is_playing = False
+            self.active_category_item = None
+
+            self.mark_btn.setEnabled(False)
+            self.mark_btn.setStyleSheet("background-color: #94A3B8; color: white; font-weight: bold;")
+            self.open_vid_btn.setEnabled(False)
+            self.open_vid_btn.setStyleSheet("background-color: #E2E8F0; color: #94A3B8; font-weight: bold;")
+
+            self.export_vid_btn.setVisible(False)
+            self.import_excel_btn.setVisible(False)
+            self.export_btn.setVisible(False)
+            self.collapse_btn.setVisible(False)
+            self.expand_btn.setVisible(False)
+
+            self.build_pareto_view()
+            self.stacked_widget.setCurrentIndex(2)
+            self.update_undo_redo_actions()
+        elif index == 1:
+            if self.view_mode == "video":
+                self.saved_video_state = self.get_current_state()
             self.view_mode = "category"
             self.timer.stop()
             self.is_playing = False
@@ -1029,6 +1255,8 @@ class TimeStudyApp(QMainWindow):
             self.export_vid_btn.setVisible(True)
             self.import_excel_btn.setVisible(False)
             self.export_btn.setVisible(False)
+            self.collapse_btn.setVisible(True)
+            self.expand_btn.setVisible(True)
             
             self.build_category_view()
             self.stacked_widget.setCurrentIndex(1)
@@ -1049,9 +1277,66 @@ class TimeStudyApp(QMainWindow):
             self.export_vid_btn.setVisible(False)
             self.import_excel_btn.setVisible(True)
             self.export_btn.setVisible(True)
+            self.collapse_btn.setVisible(True)
+            self.expand_btn.setVisible(True)
             
             self.stacked_widget.setCurrentIndex(0)
             self.update_undo_redo_actions()
+
+    def get_pareto_category_totals(self):
+        """Total delta (ms) per specific category across the whole study, descending."""
+        totals = {}
+        for segment in self.get_category_segments(self.saved_video_state):
+            totals[segment["cat_spec"]] = totals.get(segment["cat_spec"], 0) + segment["delta_ms"]
+        return sorted(totals.items(), key=lambda x: x[1], reverse=True)
+
+    def build_pareto_view(self):
+        totals = self.get_pareto_category_totals()
+
+        self.pareto_exclude_list.blockSignals(True)
+        self.pareto_exclude_list.clear()
+        for cat_name, total_ms in totals:
+            item = QListWidgetItem(f"{cat_name}  ({self.format_ms(total_ms)})")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setData(Qt.UserRole, cat_name)
+            item.setCheckState(Qt.Unchecked if cat_name in self.pareto_excluded_cats else Qt.Checked)
+            self.pareto_exclude_list.addItem(item)
+        self.pareto_exclude_list.blockSignals(False)
+
+        self.refresh_pareto_chart()
+
+    def refresh_pareto_chart(self):
+        included = [(name, ms) for name, ms in self.get_pareto_category_totals()
+                    if name not in self.pareto_excluded_cats and ms > 0]
+        grand_total = sum(ms for _, ms in included)
+
+        chart_data = []
+        running = 0
+        for name, ms in included:
+            running += ms
+            chart_data.append((name, ms / 1000.0, running / grand_total if grand_total else 0))
+        self.pareto_chart.set_data(chart_data)
+
+    def on_pareto_exclusion_changed(self, item):
+        cat_name = item.data(Qt.UserRole)
+        if item.checkState() == Qt.Checked:
+            self.pareto_excluded_cats.discard(cat_name)
+        else:
+            self.pareto_excluded_cats.add(cat_name)
+        self.refresh_pareto_chart()
+
+    def set_all_pareto_categories(self, checked):
+        self.pareto_exclude_list.blockSignals(True)
+        for i in range(self.pareto_exclude_list.count()):
+            item = self.pareto_exclude_list.item(i)
+            item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            cat_name = item.data(Qt.UserRole)
+            if checked:
+                self.pareto_excluded_cats.discard(cat_name)
+            else:
+                self.pareto_excluded_cats.add(cat_name)
+        self.pareto_exclude_list.blockSignals(False)
+        self.refresh_pareto_chart()
 
     def build_category_view(self):
         self.category_tree.setUpdatesEnabled(False)
@@ -1209,7 +1494,7 @@ class TimeStudyApp(QMainWindow):
 
     def export_category_videos(self):
         """Merges all video segments from a selected category into an MP4 file."""
-        base_state = self.saved_video_state if self.view_mode == "category" else self.get_current_state()
+        base_state = self.saved_video_state if self.view_mode != "video" else self.get_current_state()
         if not base_state:
             QMessageBox.information(self, "Export", "There is no video data loaded to export.")
             return
@@ -1485,7 +1770,7 @@ class TimeStudyApp(QMainWindow):
             self.push_state()
 
     def refresh_all_combos(self):
-        if self.view_mode == "category": return
+        if self.view_mode != "video": return
         gen_counts = {}
         spec_counts = {}
         for i in range(self.video_tree.topLevelItemCount()):
@@ -1530,7 +1815,7 @@ class TimeStudyApp(QMainWindow):
                     combo_spec.blockSignals(False)
 
     def show_tree_context_menu(self, pos):
-        if self.view_mode == "category": return
+        if self.view_mode != "video": return
         item = self.video_tree.itemAt(pos)
         if not item: return
         if item.parent() is None:
@@ -1763,7 +2048,7 @@ class TimeStudyApp(QMainWindow):
             pass
 
     def sync_all_widget_data(self):
-        if self.view_mode == "category": return
+        if self.view_mode != "video": return
         for i in range(self.video_tree.topLevelItemCount()):
             group = self.video_tree.topLevelItem(i)
             for c in range(group.childCount()):
@@ -1775,7 +2060,7 @@ class TimeStudyApp(QMainWindow):
                 if combo_spec: child.setData(2, Qt.UserRole, combo_spec.currentText())
 
     def rebind_tree_widgets(self):
-        if self.view_mode == "category": return
+        if self.view_mode != "video": return
         for i in range(self.video_tree.topLevelItemCount()):
             group_item = self.video_tree.topLevelItem(i)
             if not self.video_tree.itemWidget(group_item, 4):
@@ -1800,7 +2085,7 @@ class TimeStudyApp(QMainWindow):
                     self.video_tree.setItemWidget(child, 4, action_widget)
 
     def push_state(self):
-        if self.is_restoring_state or self.view_mode == "category": return
+        if self.is_restoring_state or self.view_mode != "video": return
         self.unsaved_changes = True
         state = self.get_current_state()
         self.undo_stack.append(state)
@@ -1813,7 +2098,7 @@ class TimeStudyApp(QMainWindow):
         self.redo_action.setEnabled(len(self.redo_stack) > 0 and self.view_mode == "video")
 
     def undo(self):
-        if not self.undo_stack or self.view_mode == "category": return
+        if not self.undo_stack or self.view_mode != "video": return
         current_state = self.get_current_state()
         self.redo_stack.append(current_state)
         prev_state = self.undo_stack.pop()
@@ -1821,7 +2106,7 @@ class TimeStudyApp(QMainWindow):
         self.update_undo_redo_actions()
 
     def redo(self):
-        if not self.redo_stack or self.view_mode == "category": return
+        if not self.redo_stack or self.view_mode != "video": return
         current_state = self.get_current_state()
         self.undo_stack.append(current_state)
         next_state = self.redo_stack.pop()
@@ -1829,7 +2114,7 @@ class TimeStudyApp(QMainWindow):
         self.update_undo_redo_actions()
 
     def get_current_state(self):
-        if self.view_mode == "category":
+        if self.view_mode != "video":
             return self.saved_video_state
         groups_data = []
         for i in range(self.video_tree.topLevelItemCount()):
@@ -1901,6 +2186,8 @@ class TimeStudyApp(QMainWindow):
             self.highlight_active_row(0)
 
     def highlight_active_row(self, pos_ms):
+        if self.view_mode == "pareto":
+            return
         if self.view_mode == "category":
             for g in range(self.category_tree.topLevelItemCount()):
                 group = self.category_tree.topLevelItem(g)
@@ -2067,7 +2354,7 @@ class TimeStudyApp(QMainWindow):
         self.refresh_playback_ui()
 
     def on_tree_item_clicked(self, item, column):
-        if self.view_mode == "category": return
+        if self.view_mode != "video": return
         if item.parent() is not None and "END VIDEO" not in item.text(3):
             if column == 4:
                 self.set_time_edit_mode(item, focus_ui=True)
@@ -2080,7 +2367,7 @@ class TimeStudyApp(QMainWindow):
             self.set_time_edit_mode(None)
 
     def on_tree_item_double_clicked(self, item, column):
-        if self.view_mode == "category": return
+        if self.view_mode != "video": return
         if item.parent() is None:
             self.switch_active_video(item, 0)
         elif column == 4 and "END VIDEO" not in item.text(3):
@@ -2542,7 +2829,7 @@ class TimeStudyApp(QMainWindow):
         if not path.lower().endswith(".csv"):
             path += ".csv"
 
-        groups_data = self.saved_video_state if self.view_mode == "category" else self.get_current_state()
+        groups_data = self.saved_video_state if self.view_mode != "video" else self.get_current_state()
 
         with open(path, "w", newline="", encoding="utf-8-sig") as csv_file:
             writer = csv.writer(csv_file)
