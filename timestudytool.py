@@ -313,6 +313,7 @@ class ParetoChartWidget(QWidget):
     LINE_COLOR = "#C0504D"      # theme accent2
     GRID_COLOR = "#B7B7B7"
     TEXT_COLOR = "#000000"
+    MAX_LABEL_PX = 110  # max width of a single rotated category label line before wrapping
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -370,13 +371,16 @@ class ParetoChartWidget(QWidget):
 
         # Reserve room for the rotated category labels along the bottom.
         fm_tick = QFontMetrics(tick_font)
-        longest = max((fm_tick.width(str(c)) for c, _, _ in self.data), default=0)
-        label_band = min(150, int(longest * 0.72) + 12)
+        line_h = fm_tick.height()
+        wrapped = [self._wrap_label(str(c), fm_tick, self.MAX_LABEL_PX) for c, _, _ in self.data]
+        longest = max((fm_tick.width(line) for lines in wrapped for line in lines), default=0)
+        max_lines = max((len(lines) for lines in wrapped), default=1)
+        label_band = min(self.MAX_LABEL_PX, longest + 12)
 
         left = 78
         right = w - 82
         top = 46
-        bottom = h - (label_band + 34)
+        bottom = h - int(0.72 * (label_band + (max_lines - 1) * line_h) + line_h + 34)
         if right - left < 60 or bottom - top < 60:
             return
         plot = QRectF(left, top, right - left, bottom - top)
@@ -429,12 +433,13 @@ class ParetoChartWidget(QWidget):
         # Rotated category labels
         painter.setFont(tick_font)
         painter.setPen(QColor(self.TEXT_COLOR))
-        for i, (cat, _, _) in enumerate(self.data):
+        for i, lines in enumerate(wrapped):
             painter.save()
             painter.translate(left + slot * (i + 0.5), bottom + 8)
             painter.rotate(-45)
-            painter.drawText(QRectF(-label_band - 10, -9, label_band + 4, 18),
-                             Qt.AlignRight | Qt.AlignVCenter, str(cat))
+            for j, line in enumerate(lines):
+                painter.drawText(QRectF(-label_band - 10, -9 + j * line_h, label_band + 4, 18),
+                                 Qt.AlignRight | Qt.AlignVCenter, line)
             painter.restore()
 
         # Axis titles
@@ -452,6 +457,24 @@ class ParetoChartWidget(QWidget):
         painter.drawText(QRectF(-plot.height() / 2, -10, plot.height(), 20),
                          Qt.AlignCenter, "Running Percent")
         painter.restore()
+
+    @staticmethod
+    def _wrap_label(text, fm, max_px):
+        """Split a category name onto two lines when it is too wide to fit on one."""
+        if fm.width(text) <= max_px:
+            return [text]
+        words = text.replace("/", "/ ").split()
+        if len(words) < 2:
+            return [text]
+        best, best_cost = 1, None
+        for split in range(1, len(words)):
+            a = " ".join(words[:split]).replace("/ ", "/")
+            b = " ".join(words[split:]).replace("/ ", "/")
+            cost = max(fm.width(a), fm.width(b))
+            if best_cost is None or cost < best_cost:
+                best, best_cost = split, cost
+        return [" ".join(words[:best]).replace("/ ", "/"),
+                " ".join(words[best:]).replace("/ ", "/")]
 
     @staticmethod
     def _fmt_seconds(value):
