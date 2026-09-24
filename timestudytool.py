@@ -1,7 +1,6 @@
 import sys
 import csv
 import json
-import math
 import os
 import random
 import cv2
@@ -320,7 +319,7 @@ class ParetoChartWidget(QWidget):
         self.data = []  # list of (category, total_seconds, cumulative_fraction)
         self.title = "Time Delay by Motion Category"
         self.x_title = "Motion Category"
-        self.y_title = "Time Difference [s]"
+        self.y_title = "Time Difference [mm:ss]"
         self.setMinimumHeight(360)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAutoFillBackground(True)
@@ -336,15 +335,16 @@ class ParetoChartWidget(QWidget):
 
     @staticmethod
     def _nice_axis_max(value, tick_count=5):
+        # Tick steps chosen so the mm:ss labels land on round time values.
+        steps = [1, 2, 5, 10, 15, 20, 30, 60, 120, 300, 600, 900, 1200, 1800,
+                 3600, 7200, 10800, 21600, 43200, 86400]
         if value <= 0:
-            return 1.0, 1.0 / tick_count
+            return float(tick_count), 1.0
         raw_step = value / tick_count
-        magnitude = 10 ** math.floor(math.log10(raw_step))
-        for mult in (1, 2, 2.5, 5, 10):
-            step = mult * magnitude
-            if step >= raw_step:
-                break
-        return step * tick_count, step
+        step = next((s for s in steps if s >= raw_step), steps[-1])
+        while step * tick_count < value:
+            step += steps[-1]
+        return float(step * tick_count), float(step)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -455,7 +455,12 @@ class ParetoChartWidget(QWidget):
 
     @staticmethod
     def _fmt_seconds(value):
-        return f"{value:.0f}" if value >= 10 or value == 0 else f"{value:.1f}"
+        total = int(round(value))
+        hours, rem = divmod(total, 3600)
+        minutes, seconds = divmod(rem, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
 
 
 class TimeStudyApp(QMainWindow):
