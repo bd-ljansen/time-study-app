@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF, QSettings
 from PyQt5.QtGui import (
     QImage, QPixmap, QColor, QBrush, QFont, QPainter, QPen, QPolygonF,
-    QFontMetrics
+    QFontMetrics, QIcon
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1932,7 +1932,12 @@ class TimeStudyApp(QMainWindow):
             QToolButton:disabled { color: #94A3B8; background-color: #F1F5F9; }
         """)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
-        self.home_action = QAction("⌂", self)
+        home_icon_path = os.path.join(SCRIPT_DIR, "assets", "home_icon.png")
+        if os.path.exists(home_icon_path):
+            home_icon = QIcon(home_icon_path)
+        else:
+            home_icon = self.style().standardIcon(QStyle.SP_FileDialogStart)
+        self.home_action = QAction(home_icon, "", self)
         self.home_action.setToolTip("Return to Home")
         self.home_action.triggered.connect(self.go_home)
         toolbar.addAction(self.home_action)
