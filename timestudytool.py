@@ -606,6 +606,13 @@ class WorkInstructionWindow(QWidget):
         layout.addWidget(self.scroll, 1)
 
         nav = QHBoxLayout()
+        self.link_btn = QPushButton("Link Slide to Current Row")
+        self.link_btn.setFocusPolicy(Qt.NoFocus)
+        self.link_btn.setToolTip("Write this slide number into the Slide column of the selected row")
+        self.link_btn.setStyleSheet("font-weight: bold;")
+        self.link_btn.clicked.connect(self.link_slide_to_row)
+        nav.addWidget(self.link_btn)
+        nav.addSpacing(12)
         self.prev_btn = QPushButton("◄ Prev Slide")
         self.prev_btn.setFocusPolicy(Qt.NoFocus)
         self.prev_btn.clicked.connect(lambda: self.step_page(-1))
@@ -926,6 +933,11 @@ class WorkInstructionWindow(QWidget):
 
     def focus_viewer(self):
         self.canvas.setFocus(Qt.OtherFocusReason)
+
+    def link_slide_to_row(self):
+        owner = self.parent()
+        if self.doc and hasattr(owner, "link_slide_to_selected_row"):
+            owner.link_slide_to_selected_row(self.current_page() + 1)
 
     def closeEvent(self, event):
         self._pixmap_cache.clear()
@@ -3426,6 +3438,20 @@ class TimeStudyApp(QMainWindow):
     def jump_wi_to_slide(self, slide_value):
         if self.auto_jump_to_slide and self.wi_window is not None and self.wi_window.doc:
             self.wi_window.goto_slide(slide_value)
+
+    def link_slide_to_selected_row(self, slide_number):
+        if self.view_mode != "video":
+            QMessageBox.information(self, "Link Slide", "Switch to Video view to link a slide to a row.")
+            return
+        item = self.video_tree.currentItem()
+        if item is None or item.parent() is None or "END VIDEO" in item.text(3):
+            QMessageBox.information(self, "Link Slide", "Select a timestamp row first, then link the slide.")
+            return
+        self.push_state()
+        self.video_tree.blockSignals(True)
+        item.setText(0, clean_slide_str(slide_number))
+        self.video_tree.blockSignals(False)
+        self.unsaved_changes = True
 
     def save_project(self):
         if not self.project_path: return self.save_project_as()
