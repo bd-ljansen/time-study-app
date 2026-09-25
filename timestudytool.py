@@ -2101,7 +2101,7 @@ class TimeStudyApp(QMainWindow):
     def refresh_home_recent_projects(self):
         if not hasattr(self, "home_recent_buttons"):
             return
-        recent = self._recent_project_paths()[:4]
+        recent = self._recent_project_paths()[1:4]
         if hasattr(self, "home_recent_widget"):
             self.home_recent_widget.setVisible(bool(recent))
         if hasattr(self, "home_recent_title"):
