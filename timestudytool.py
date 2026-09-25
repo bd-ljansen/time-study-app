@@ -483,11 +483,12 @@ class PdfCanvas(QWidget):
     def __init__(self, win):
         super().__init__(win)
         self.win = win
-        self.setFocusPolicy(Qt.NoFocus)
-        self.setCursor(Qt.IBeamCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.ArrowCursor)
         self.setMouseTracking(False)
         self.sel_anchor = None  # (page_index, word_index)
         self.sel_focus = None
+        self.selection_armed = False  # text selection only starts after a double-click
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -527,18 +528,18 @@ class PdfCanvas(QWidget):
 
     def clear_selection(self):
         self.sel_anchor = self.sel_focus = None
+        self.selection_armed = False
+        self.setCursor(Qt.ArrowCursor)
         self.update()
 
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        hit = self.win.word_at(event.pos())
-        self.sel_anchor = hit
-        self.sel_focus = hit
-        self.update()
+        if self.sel_anchor is not None or self.selection_armed:
+            self.clear_selection()
 
     def mouseMoveEvent(self, event):
-        if not (event.buttons() & Qt.LeftButton) or self.sel_anchor is None:
+        if not self.selection_armed or not (event.buttons() & Qt.LeftButton) or self.sel_anchor is None:
             return
         hit = self.win.word_at(event.pos())
         if hit is not None and hit != self.sel_focus:
@@ -546,10 +547,18 @@ class PdfCanvas(QWidget):
             self.update()
 
     def mouseDoubleClickEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
         hit = self.win.word_at(event.pos())
         if hit is not None:
+            self.selection_armed = True
+            self.setCursor(Qt.IBeamCursor)
             self.sel_anchor = self.sel_focus = hit
             self.update()
+
+    def keyPressEvent(self, event):
+        if not self.win.handle_nav_key(event.key(), event.modifiers()):
+            super().keyPressEvent(event)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -607,7 +616,7 @@ class WorkInstructionWindow(QWidget):
         nav.addStretch()
         self.copy_btn = QPushButton("Copy Text")
         self.copy_btn.setFocusPolicy(Qt.NoFocus)
-        self.copy_btn.setToolTip("Copy the selected text (Ctrl+C)")
+        self.copy_btn.setToolTip("Double-click text to start selecting, then drag. Ctrl+C copies.")
         self.copy_btn.clicked.connect(self.copy_selection)
         nav.addWidget(self.copy_btn)
         nav.addSpacing(12)
@@ -828,6 +837,8 @@ class WorkInstructionWindow(QWidget):
             return
         last_page = self.page_count() - 1
         last_words = self.page_words(last_page)
+        self.canvas.selection_armed = True
+        self.canvas.setCursor(Qt.IBeamCursor)
         self.canvas.sel_anchor = (0, 0)
         self.canvas.sel_focus = (last_page, max(0, len(last_words) - 1))
         self.canvas.update()
@@ -911,6 +922,9 @@ class WorkInstructionWindow(QWidget):
     def keyPressEvent(self, event):
         if not self.handle_nav_key(event.key(), event.modifiers()):
             super().keyPressEvent(event)
+
+    def focus_viewer(self):
+        self.canvas.setFocus(Qt.OtherFocusReason)
 
     def closeEvent(self, event):
         self._pixmap_cache.clear()
@@ -3246,7 +3260,11 @@ class TimeStudyApp(QMainWindow):
         self.unsaved_changes = False
 
     def _event_belongs_to_wi(self, obj):
-        if self.wi_window is None or not isinstance(obj, QWidget):
+        if self.wi_window is None:
+            return False
+        if QApplication.activeWindow() is self.wi_window:
+            return True
+        if not isinstance(obj, QWidget):
             return False
         return obj is self.wi_window or self.wi_window.isAncestorOf(obj)
 
@@ -3276,7 +3294,7 @@ class TimeStudyApp(QMainWindow):
             self.wi_window.show()
             self.wi_window.raise_()
             self.wi_window.activateWindow()
-            self.wi_window.setFocus()
+            self.wi_window.focus_viewer()
         return True
 
     def close_work_instruction(self):
