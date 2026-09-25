@@ -490,7 +490,8 @@ class PdfCanvas(QWidget):
         self.setMouseTracking(False)
         self.sel_anchor = None  # (page_index, word_index)
         self.sel_focus = None
-        self.selection_armed = False  # text selection only starts after a double-click
+        self.selection_armed = False  # text selection only starts after a drag or double-click
+        self._drag_start_pos = None
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -531,7 +532,17 @@ class PdfCanvas(QWidget):
     def clear_selection(self):
         self.sel_anchor = self.sel_focus = None
         self.selection_armed = False
+        self._drag_start_pos = None
         self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def _start_selection(self, hit):
+        if hit is None:
+            return
+        self.selection_armed = True
+        self.setCursor(Qt.IBeamCursor)
+        self.sel_anchor = self.sel_focus = hit
+        self._drag_start_pos = None
         self.update()
 
     def mousePressEvent(self, event):
@@ -539,24 +550,38 @@ class PdfCanvas(QWidget):
             return
         if self.sel_anchor is not None or self.selection_armed:
             self.clear_selection()
+            return
+        self._drag_start_pos = event.pos()
 
     def mouseMoveEvent(self, event):
-        if not self.selection_armed or not (event.buttons() & Qt.LeftButton) or self.sel_anchor is None:
+        if not (event.buttons() & Qt.LeftButton):
+            return
+        if self.selection_armed and self.sel_anchor is not None:
+            hit = self.win.word_at(event.pos())
+            if hit is not None and hit != self.sel_focus:
+                self.sel_focus = hit
+                self.update()
+            return
+        if self._drag_start_pos is None:
+            return
+        drag_delta = (event.pos() - self._drag_start_pos).manhattanLength()
+        if drag_delta <= 4:
             return
         hit = self.win.word_at(event.pos())
-        if hit is not None and hit != self.sel_focus:
-            self.sel_focus = hit
-            self.update()
+        if hit is not None:
+            self._start_selection(hit)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        if not self.selection_armed:
+            self._drag_start_pos = None
 
     def mouseDoubleClickEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        hit = self.win.word_at(event.pos())
-        if hit is not None:
-            self.selection_armed = True
-            self.setCursor(Qt.IBeamCursor)
-            self.sel_anchor = self.sel_focus = hit
-            self.update()
+        self._drag_start_pos = None
+        self._start_selection(self.win.word_at(event.pos()))
 
     def keyPressEvent(self, event):
         if not self.win.handle_nav_key(event.key(), event.modifiers()):
@@ -2150,6 +2175,7 @@ class TimeStudyApp(QMainWindow):
             else:
                 self.unsaved_changes = False
 
+        self.close_work_instruction()
         self.app_stack.setCurrentWidget(self.home_page)
         self.main_toolbar.hide()
 
@@ -3888,6 +3914,7 @@ class TimeStudyApp(QMainWindow):
             elif reply == QMessageBox.Cancel:
                 event.ignore()
                 return
+        self.close_work_instruction()
         event.accept()
 
     def new_project(self):
