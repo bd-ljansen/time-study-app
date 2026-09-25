@@ -5,6 +5,15 @@ import os
 import random
 import cv2
 import openpyxl
+
+try:
+    import pymupdf as fitz  # PyMuPDF, used to render Work Instruction PDFs
+except ImportError:
+    try:
+        import fitz
+    except ImportError:
+        fitz = None
+
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -16,7 +25,7 @@ from PyQt5.QtWidgets import (
     QGraphicsPixmapItem, QLineEdit, QTextEdit, QMessageBox, QAction,
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
     QMenu, QProgressDialog, QStackedWidget, QSplitter, QListWidget, QListWidgetItem,
-    QGroupBox, QSizePolicy, QButtonGroup
+    QGroupBox, QSizePolicy, QButtonGroup, QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF
 from PyQt5.QtGui import (
@@ -466,6 +475,140 @@ class ParetoChartWidget(QWidget):
         return f"{minutes:02d}:{seconds:02d}"
 
 
+class WorkInstructionWindow(QWidget):
+    """Pop-out window that shows a Work Instruction PDF one slide at a time."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.Window)
+        self.setWindowTitle("Work Instructions")
+        self.resize(960, 760)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        self.doc = None
+        self.pdf_path = ""
+        self.page_index = 0
+        self._rendered_width = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setAlignment(Qt.AlignCenter)
+        self.scroll.setStyleSheet("background-color: #3A3A3A; border: 1px solid #222222;")
+        self.page_label = QLabel("No Work Instruction loaded.")
+        self.page_label.setAlignment(Qt.AlignCenter)
+        self.page_label.setStyleSheet("color: #DDDDDD; font-size: 14px;")
+        self.scroll.setWidget(self.page_label)
+        layout.addWidget(self.scroll, 1)
+
+        nav = QHBoxLayout()
+        self.prev_btn = QPushButton("◄ Prev Slide")
+        self.prev_btn.setFocusPolicy(Qt.NoFocus)
+        self.prev_btn.clicked.connect(lambda: self.step_page(-1))
+        nav.addWidget(self.prev_btn)
+        self.next_btn = QPushButton("Next Slide ►")
+        self.next_btn.setFocusPolicy(Qt.NoFocus)
+        self.next_btn.clicked.connect(lambda: self.step_page(1))
+        nav.addWidget(self.next_btn)
+        nav.addStretch()
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("font-weight: bold; color: #1E293B; font-size: 13px;")
+        nav.addWidget(self.status_label)
+        layout.addLayout(nav)
+
+        self.scroll.viewport().installEventFilter(self)
+
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self.render_page)
+
+    def load_pdf(self, path):
+        if fitz is None:
+            raise RuntimeError("PyMuPDF (fitz) is not installed.")
+        doc = fitz.open(path)
+        if self.doc:
+            self.doc.close()
+        self.doc = doc
+        self.pdf_path = path
+        self.page_index = 0
+        self._rendered_width = 0
+        self.setWindowTitle(f"Work Instructions - {os.path.basename(path)}")
+        self.render_page()
+
+    def page_count(self):
+        return len(self.doc) if self.doc else 0
+
+    def goto_page(self, index):
+        if not self.doc:
+            return
+        index = max(0, min(int(index), self.page_count() - 1))
+        if index == self.page_index and self._rendered_width:
+            return
+        self.page_index = index
+        self.render_page()
+        self.scroll.verticalScrollBar().setValue(0)
+
+    def goto_slide(self, slide_value):
+        """Slide numbers are 1-based and map directly onto PDF pages."""
+        digits = "".join(ch for ch in str(slide_value) if ch.isdigit())
+        if not digits:
+            return
+        self.goto_page(int(digits) - 1)
+
+    def step_page(self, delta):
+        self.goto_page(self.page_index + delta)
+
+    def render_page(self):
+        if not self.doc or self.page_count() == 0:
+            return
+        page = self.doc[self.page_index]
+        avail_w = max(200, self.scroll.viewport().width() - 4)
+        zoom = avail_w / page.rect.width if page.rect.width else 1.0
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(img.copy())
+        self.page_label.setPixmap(pixmap)
+        self.page_label.resize(pixmap.size())
+        self._rendered_width = avail_w
+        self.status_label.setText(f"Slide {self.page_index + 1} / {self.page_count()}")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.doc:
+            self._resize_timer.start(120)
+
+    def eventFilter(self, obj, event):
+        if obj is self.scroll.viewport() and event.type() == QEvent.Wheel and self.doc:
+            delta = event.angleDelta().y()
+            bar = self.scroll.verticalScrollBar()
+            at_end = delta < 0 and bar.value() >= bar.maximum()
+            at_start = delta > 0 and bar.value() <= bar.minimum()
+            if at_end or at_start:
+                self.step_page(1 if delta < 0 else -1)
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key in (Qt.Key_Left, Qt.Key_PageUp, Qt.Key_Backspace):
+            self.step_page(-1)
+        elif key in (Qt.Key_Right, Qt.Key_PageDown, Qt.Key_Space):
+            self.step_page(1)
+        elif key == Qt.Key_Home:
+            self.goto_page(0)
+        elif key == Qt.Key_End:
+            self.goto_page(self.page_count() - 1)
+        else:
+            super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        if self.doc:
+            self.doc.close()
+            self.doc = None
+        super().closeEvent(event)
+
+
 class TimeStudyApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -486,6 +629,8 @@ class TimeStudyApp(QMainWindow):
         self.active_video_path = ""
         self.active_group_item = None
         self.project_path = ""
+        self.wi_path = ""
+        self.wi_window = None
         self.is_playing = False
         self.fps = 30.0
         self.total_frames = 0
@@ -918,6 +1063,9 @@ class TimeStudyApp(QMainWindow):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress:
+            # The WI pop-out owns its own arrow-key navigation while it is focused.
+            if self.wi_window is not None and self.wi_window.isActiveWindow():
+                return super().eventFilter(obj, event)
             focused = QApplication.focusWidget()
             key = event.key()
 
@@ -996,6 +1144,9 @@ class TimeStudyApp(QMainWindow):
         import_excel_action = QAction("Import from Excel (.xlsx)...", self)
         import_excel_action.triggered.connect(self.import_from_excel)
         file_menu.addAction(import_excel_action)
+        open_wi_action = QAction("Open WI (PDF)...", self)
+        open_wi_action.triggered.connect(self.open_work_instruction)
+        file_menu.addAction(open_wi_action)
         file_menu.addSeparator()
         save_action = QAction("Save Project", self)
         save_action.setShortcut("Ctrl+S")
@@ -1235,6 +1386,7 @@ class TimeStudyApp(QMainWindow):
         self.category_tree.setColumnWidth(0, 200)
         self.category_tree.setColumnWidth(1, 220)
         self.category_tree.setColumnWidth(3, 160)
+        self.category_tree.itemClicked.connect(lambda item, col: self.jump_wi_to_slide(item.text(0)))
         self.stacked_widget.addWidget(self.category_tree)
 
         # ---------- Pareto Mode Page ----------
@@ -2506,6 +2658,7 @@ class TimeStudyApp(QMainWindow):
         self.refresh_playback_ui()
 
     def on_tree_item_clicked(self, item, column):
+        self.jump_wi_to_slide(item.text(0))
         if self.view_mode != "video": return
         if item.parent() is not None and "END VIDEO" not in item.text(3):
             if column == 4:
@@ -2770,6 +2923,7 @@ class TimeStudyApp(QMainWindow):
         self.project_path = ""
         self.active_video_path = ""
         self.active_group_item = None
+        self.close_work_instruction()
         if self.cap:
             self.cap.release()
             self.cap = None
@@ -2777,6 +2931,44 @@ class TimeStudyApp(QMainWindow):
         self.proj_status_label.setText("Project: Unsaved")
         self.time_label.setText("00:00 / 00:00 (◄ / ► Arrow Keys = ±1s)")
         self.unsaved_changes = False
+
+    def open_work_instruction(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open Work Instruction PDF", self._default_browse_dir(), "PDF Files (*.pdf)")
+        if not path: return
+        if self.load_work_instruction(path):
+            self.unsaved_changes = True
+
+    def load_work_instruction(self, path, show=True, warn_missing=True):
+        if fitz is None:
+            QMessageBox.warning(self, "Work Instructions", "PyMuPDF is not installed.\nRun: pip install PyMuPDF")
+            return False
+        if not path or not os.path.exists(path):
+            if warn_missing:
+                QMessageBox.warning(self, "Work Instructions", f"Work Instruction PDF not found:\n{path}")
+            return False
+        if self.wi_window is None:
+            self.wi_window = WorkInstructionWindow(self)
+        try:
+            self.wi_window.load_pdf(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Work Instructions", f"Failed to open PDF:\n{str(e)}")
+            return False
+        self.wi_path = path
+        if show:
+            self.wi_window.show()
+            self.wi_window.raise_()
+            self.wi_window.activateWindow()
+        return True
+
+    def close_work_instruction(self):
+        self.wi_path = ""
+        if self.wi_window is not None:
+            self.wi_window.close()
+            self.wi_window = None
+
+    def jump_wi_to_slide(self, slide_value):
+        if self.wi_window is not None and self.wi_window.doc:
+            self.wi_window.goto_slide(slide_value)
 
     def save_project(self):
         if not self.project_path: return self.save_project_as()
@@ -2812,6 +3004,7 @@ class TimeStudyApp(QMainWindow):
             groups_data.append(g)
         project_data = {
             "version": 4, "active_video_path": self._make_relative_path(self.active_video_path, path), "last_position_ms": current_ms,
+            "work_instruction_path": self._make_relative_path(self.wi_path, path),
             "video_groups": groups_data, "custom_gen_cats": list(self.custom_gen_cats), "custom_spec_cats": list(self.custom_spec_cats),
             "custom_category_colors": {
                 cat_name: {"background": colors[0], "foreground": colors[1]}
@@ -2899,6 +3092,12 @@ class TimeStudyApp(QMainWindow):
         if not switched and self.video_tree.topLevelItemCount() > 0:
             self.switch_active_video(self.video_tree.topLevelItem(0), last_ms)
         progress.close()
+
+        self.close_work_instruction()
+        wi_stored = data.get("work_instruction_path", "")
+        if wi_stored:
+            self.load_work_instruction(self._resolve_project_path(wi_stored, path), show=True)
+
         filename = os.path.basename(path)
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
         self.proj_status_label.setText(f"Project: {filename}")
