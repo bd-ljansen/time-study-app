@@ -2101,7 +2101,7 @@ class TimeStudyApp(QMainWindow):
     def refresh_home_recent_projects(self):
         if not hasattr(self, "home_recent_buttons"):
             return
-        recent = self._recent_project_paths()[1:4]
+        recent = self._recent_project_paths()[:4]
         if hasattr(self, "home_recent_widget"):
             self.home_recent_widget.setVisible(bool(recent))
         if hasattr(self, "home_recent_title"):
@@ -2116,10 +2116,10 @@ class TimeStudyApp(QMainWindow):
                 btn.clicked.disconnect()
                 btn.clicked.connect(lambda _, p=path: self.open_recent_project(p))
             else:
-                btn.setText("Recent Project")
+                btn.setText("")
                 btn.setToolTip("")
                 btn.setEnabled(False)
-                btn.setVisible(True)
+                btn.setVisible(False)
 
     def show_editor_screen(self):
         if hasattr(self, "app_stack"):
