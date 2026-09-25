@@ -3411,6 +3411,15 @@ class TimeStudyApp(QMainWindow):
         return obj is self.wi_window or self.wi_window.isAncestorOf(obj)
 
     def open_work_instruction(self):
+        if self.wi_path:
+            reply = QMessageBox.warning(
+                self, "Replace Work Instruction",
+                f"This project is already linked to a Work Instruction:\n{os.path.basename(self.wi_path)}\n\n"
+                "Opening a new one will unlink it. Continue?",
+                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel
+            )
+            if reply != QMessageBox.Yes:
+                return
         path, _ = QFileDialog.getOpenFileName(self, "Open Work Instruction PDF", self._default_browse_dir(), "PDF Files (*.pdf)")
         if not path: return
         if self.load_work_instruction(path):
