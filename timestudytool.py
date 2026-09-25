@@ -867,11 +867,17 @@ class WorkInstructionWindow(QWidget):
 
     def eventFilter(self, obj, event):
         if obj in (self.scroll.viewport(), self.canvas) and self.doc:
-            if event.type() == QEvent.Wheel and (event.modifiers() & Qt.ControlModifier):
-                delta = event.angleDelta().y()
-                if delta:
-                    self.adjust_zoom(1.15 if delta > 0 else 1 / 1.15)
-                return True
+            if event.type() == QEvent.Wheel:
+                delta = event.angleDelta().y() or event.angleDelta().x()
+                if event.modifiers() & Qt.ControlModifier:
+                    if delta:
+                        self.adjust_zoom(1.15 if delta > 0 else 1 / 1.15)
+                    return True
+                if event.modifiers() & Qt.ShiftModifier:
+                    if delta:
+                        bar = self.scroll.horizontalScrollBar()
+                        bar.setValue(bar.value() - delta)
+                    return True
             if event.type() == QEvent.KeyPress and self.handle_nav_key(event.key(), event.modifiers()):
                 return True
         return super().eventFilter(obj, event)
