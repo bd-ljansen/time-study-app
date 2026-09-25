@@ -1932,7 +1932,7 @@ class TimeStudyApp(QMainWindow):
             QToolButton:disabled { color: #94A3B8; background-color: #F1F5F9; }
         """)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
-        self.home_action = QAction(self.style().standardIcon(QStyle.SP_DirHomeIcon), "Home", self)
+        self.home_action = QAction("⌂", self)
         self.home_action.setToolTip("Return to Home")
         self.home_action.triggered.connect(self.go_home)
         toolbar.addAction(self.home_action)
