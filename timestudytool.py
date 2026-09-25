@@ -650,7 +650,7 @@ class WorkInstructionWindow(QWidget):
         nav.addWidget(self.next_btn)
         nav.addStretch()
 
-        self.zoom_reset_btn = QPushButton("Fit")
+        self.zoom_reset_btn = QPushButton("Reset Zoom")
         self.zoom_reset_btn.setFocusPolicy(Qt.NoFocus)
         self.zoom_reset_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.zoom_reset_btn.setToolTip("Reset zoom to fit width (Ctrl+0)")
