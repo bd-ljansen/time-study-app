@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
     QMenu, QProgressDialog, QStackedWidget, QSplitter, QListWidget, QListWidgetItem,
     QGroupBox, QSizePolicy, QButtonGroup, QScrollArea, QDialog, QCheckBox,
-    QToolButton
+    QToolButton, QColorDialog
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF, QSettings
 from PyQt5.QtGui import (
@@ -77,6 +77,7 @@ CATEGORY_COLORS = {
     "Ergotranz": ("#E0F2FE", "#075985"),
     "Read WI": ("#E0E7FF", "#3730A3"),
 }
+BASE_CATEGORY_COLORS = dict(CATEGORY_COLORS)
 
 
 def clean_slide_str(val):
@@ -987,12 +988,26 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        categories = QListWidget()
-        categories.setFixedWidth(215)
-        categories.addItem("WI pop-out")
-        categories.setCurrentRow(0)
-        layout.addWidget(categories)
+        self.categories = QListWidget()
+        self.categories.setFixedWidth(215)
+        self.categories.addItem("WI pop-out")
+        self.categories.addItem("Appearance")
+        self.categories.addItem("Categories")
+        layout.addWidget(self.categories)
 
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_wi_page(app))
+        self.pages.addWidget(self._build_appearance_page(app))
+        self.pages.addWidget(self._build_categories_page(app))
+        layout.addWidget(self.pages, 1)
+
+        self.categories.currentRowChanged.connect(self._show_category)
+        self.categories.setCurrentRow(0)
+
+    def _show_category(self, index):
+        self.pages.setCurrentIndex(index)
+
+    def _build_wi_page(self, app):
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(32, 26, 32, 24)
@@ -1028,7 +1043,151 @@ class SettingsDialog(QDialog):
         close_button.clicked.connect(self.accept)
         button_layout.addWidget(close_button)
         content_layout.addLayout(button_layout)
-        layout.addWidget(content, 1)
+        return content
+
+    def _build_appearance_page(self, app):
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(32, 26, 32, 24)
+        content_layout.setSpacing(18)
+
+        title = QLabel("Appearance")
+        title.setObjectName("settingsTitle")
+        content_layout.addWidget(title)
+
+        section = QLabel("THEME")
+        section.setObjectName("settingsSection")
+        content_layout.addWidget(section)
+
+        self.dark_mode_checkbox = self._add_setting(
+            content_layout,
+            "Dark mode",
+            "Use a darker interface for the main application window.",
+            app.dark_mode,
+            app.set_dark_mode,
+        )
+
+        content_layout.addStretch()
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+        content_layout.addLayout(button_layout)
+        return content
+
+    def _build_categories_page(self, app):
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(32, 26, 32, 24)
+        content_layout.setSpacing(16)
+
+        title = QLabel("Categories")
+        title.setObjectName("settingsTitle")
+        content_layout.addWidget(title)
+
+        description = QLabel("Edit the default category pick-lists and chip colors. Existing project rows keep their assigned categories.")
+        description.setObjectName("settingsDescription")
+        description.setWordWrap(True)
+        content_layout.addWidget(description)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll_content = QWidget()
+        self.category_editor_layout = QVBoxLayout(scroll_content)
+        self.category_editor_layout.setContentsMargins(0, 0, 0, 0)
+        self.category_editor_layout.setSpacing(18)
+        scroll.setWidget(scroll_content)
+        content_layout.addWidget(scroll, 1)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+        content_layout.addLayout(button_layout)
+
+        self._refresh_category_editor()
+        return content
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            child = item.widget()
+            if child is not None:
+                child.deleteLater()
+            elif item.layout() is not None:
+                self._clear_layout(item.layout())
+
+    def _refresh_category_editor(self):
+        self._clear_layout(self.category_editor_layout)
+        self._add_category_section("GENERAL", "general", self.app.default_cat_general_options)
+        self._add_category_section("SPECIFIC", "specific", self.app.default_cat_specific_options)
+        self.category_editor_layout.addStretch()
+
+    def _add_category_section(self, title, cat_type, categories):
+        header = QHBoxLayout()
+        section = QLabel(title)
+        section.setObjectName("settingsSection")
+        header.addWidget(section)
+        header.addStretch()
+        add_button = QPushButton("Add")
+        add_button.clicked.connect(lambda: self._add_default_category(cat_type))
+        header.addWidget(add_button)
+        self.category_editor_layout.addLayout(header)
+
+        for category in categories:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            name_edit = QLineEdit(category)
+            name_edit.setMinimumHeight(32)
+            name_edit.editingFinished.connect(lambda edit=name_edit, old=category, ct=cat_type: self._rename_default_category(ct, old, edit.text()))
+            row.addWidget(name_edit, 1)
+
+            color_button = QPushButton("Color")
+            color_button.setMinimumWidth(86)
+            self._style_color_button(color_button, category)
+            color_button.clicked.connect(lambda _, cat=category: self._choose_category_color(cat))
+            row.addWidget(color_button)
+
+            delete_button = QPushButton("Delete")
+            delete_button.clicked.connect(lambda _, cat=category, ct=cat_type: self._delete_default_category(ct, cat))
+            row.addWidget(delete_button)
+
+            self.category_editor_layout.addLayout(row)
+
+    def _style_color_button(self, button, category):
+        bg, fg = CATEGORY_COLORS.get(category, ("#F3F4F6", "#374151"))
+        button.setStyleSheet(f"QPushButton {{ background-color: {bg}; color: {fg}; border: 1px solid {fg}; padding: 7px 12px; border-radius: 3px; }}")
+
+    def _add_default_category(self, cat_type):
+        title = "General" if cat_type == "general" else "Specific"
+        name, ok = QInputDialog.getText(self, f"Add {title} Category", "Category name:")
+        if ok and self.app.add_default_category(cat_type, name):
+            self._refresh_category_editor()
+
+    def _rename_default_category(self, cat_type, old_name, new_name):
+        if self.app.rename_default_category(cat_type, old_name, new_name):
+            self._refresh_category_editor()
+
+    def _delete_default_category(self, cat_type, category):
+        reply = QMessageBox.question(
+            self,
+            "Delete Default Category",
+            f"Remove '{category}' from the default category list? Existing rows using it will not be changed.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes and self.app.delete_default_category(cat_type, category):
+            self._refresh_category_editor()
+
+    def _choose_category_color(self, category):
+        current = QColor(CATEGORY_COLORS.get(category, ("#F3F4F6", "#374151"))[0])
+        color = QColorDialog.getColor(current, self, f"Choose Color for {category}")
+        if color.isValid():
+            self.app.set_category_color(category, color.name().upper())
+            self._refresh_category_editor()
 
     def _add_setting(self, layout, name, description, checked, callback):
         row = QHBoxLayout()
@@ -1059,6 +1218,7 @@ class TimeStudyApp(QMainWindow):
         self.settings = QSettings("TimeStudyTool", "TimeStudyTool")
         self.auto_jump_to_slide = self.settings.value("wi/auto_jump_to_slide", True, type=bool)
         self.auto_open_wi_on_startup = self.settings.value("wi/auto_open_on_startup", True, type=bool)
+        self.dark_mode = self.settings.value("ui/dark_mode", False, type=bool)
 
         self.unsaved_changes = False
         self.view_mode = "video"
@@ -1085,6 +1245,7 @@ class TimeStudyApp(QMainWindow):
         self.custom_gen_cats = set()
         self.custom_spec_cats = set()
         self.custom_category_colors = {}
+        self.settings_category_colors = {}
         self.custom_color_hue_offset = random.randrange(24)
         self.time_editing_item = None
 
@@ -1106,18 +1267,12 @@ class TimeStudyApp(QMainWindow):
             "Other", "Swap Bit", "Ergotranz", "Connection", "Grease/Loctite", "Inspection",
             "Pliers/Scissors", "Wait", "Write", "Clean", "Flip/Rotate", "Read WI"
         ]
-
-        self.cat_general_options = self.default_cat_general_options.copy()
-        self.cat_specific_options = self.default_cat_specific_options.copy()
-        self.cat_general_options.sort()
-        
-        self.cat_specific_options.sort(key=lambda x: (
-            self.default_cat_specific_options.index(x) if x in self.default_cat_specific_options else 999,
-            x.lower()
-        ))
+        self._load_category_settings()
+        self._reset_category_options_to_defaults()
 
         self.init_ui()
         self.create_menu_bar()
+        self.apply_theme()
         QApplication.instance().installEventFilter(self)
         
         # Add to the end of def __init__(self):
@@ -1393,8 +1548,143 @@ class TimeStudyApp(QMainWindow):
         
     def _clear_custom_category_colors(self):
         for cat_name in self.custom_category_colors:
-            CATEGORY_COLORS.pop(cat_name, None)
+            if cat_name in self.settings_category_colors:
+                CATEGORY_COLORS[cat_name] = self.settings_category_colors[cat_name]
+            elif cat_name in BASE_CATEGORY_COLORS:
+                CATEGORY_COLORS[cat_name] = BASE_CATEGORY_COLORS[cat_name]
+            else:
+                CATEGORY_COLORS.pop(cat_name, None)
         self.custom_category_colors.clear()
+
+    def _settings_list(self, key, fallback):
+        value = self.settings.value(key, fallback, type=list)
+        if isinstance(value, str):
+            value = [value]
+        cleaned = []
+        for item in value or []:
+            item = str(item).strip()
+            if item and item not in cleaned:
+                cleaned.append(item)
+        return cleaned or fallback.copy()
+
+    def _load_category_settings(self):
+        self.default_cat_general_options = self._settings_list("categories/general_defaults", self.default_cat_general_options)
+        self.default_cat_specific_options = self._settings_list("categories/specific_defaults", self.default_cat_specific_options)
+        self.settings_category_colors.clear()
+        raw_colors = self.settings.value("categories/color_overrides", "{}", type=str)
+        try:
+            saved_colors = json.loads(raw_colors) if raw_colors else {}
+        except (TypeError, ValueError):
+            saved_colors = {}
+        for cat_name, color_data in saved_colors.items():
+            if not isinstance(color_data, dict):
+                continue
+            background = QColor(color_data.get("background", ""))
+            foreground = QColor(color_data.get("foreground", ""))
+            if background.isValid() and foreground.isValid():
+                colors = (background.name().upper(), foreground.name().upper())
+                self.settings_category_colors[cat_name] = colors
+                CATEGORY_COLORS[cat_name] = colors
+
+    def _save_category_settings(self):
+        self.settings.setValue("categories/general_defaults", self.default_cat_general_options)
+        self.settings.setValue("categories/specific_defaults", self.default_cat_specific_options)
+        self.settings.setValue("categories/color_overrides", json.dumps({
+            cat_name: {"background": colors[0], "foreground": colors[1]}
+            for cat_name, colors in self.settings_category_colors.items()
+        }))
+        self.settings.sync()
+
+    def _category_foreground_for_background(self, background):
+        color = QColor(background)
+        brightness = (color.red() * 299 + color.green() * 587 + color.blue() * 114) / 1000
+        return "#111827" if brightness >= 150 else "#FFFFFF"
+
+    def _sort_category_options(self):
+        self.cat_general_options.sort()
+        self.cat_specific_options.sort(key=lambda x: (
+            self.default_cat_specific_options.index(x) if x in self.default_cat_specific_options else 999,
+            x.lower()
+        ))
+
+    def _reset_category_options_to_defaults(self):
+        self.cat_general_options = self.default_cat_general_options.copy()
+        self.cat_specific_options = self.default_cat_specific_options.copy()
+        self._sort_category_options()
+
+    def _rebuild_category_options(self):
+        self.cat_general_options = self.default_cat_general_options.copy()
+        self.cat_specific_options = self.default_cat_specific_options.copy()
+        for cat in sorted(self.custom_gen_cats, key=str.lower):
+            if cat not in self.cat_general_options:
+                self.cat_general_options.append(cat)
+        for cat in sorted(self.custom_spec_cats, key=str.lower):
+            if cat not in self.cat_specific_options:
+                self.cat_specific_options.append(cat)
+        self._sort_category_options()
+
+    def add_default_category(self, cat_type, cat_name):
+        clean_cat = (cat_name or "").strip()
+        if not clean_cat:
+            return False
+        options = self.default_cat_general_options if cat_type == "general" else self.default_cat_specific_options
+        if clean_cat in options:
+            return False
+        options.append(clean_cat)
+        self._ensure_category_color(clean_cat)
+        if cat_type == "general":
+            self.custom_gen_cats.discard(clean_cat)
+        else:
+            self.custom_spec_cats.discard(clean_cat)
+        self._save_category_settings()
+        self._rebuild_category_options()
+        self.refresh_all_combos()
+        return True
+
+    def rename_default_category(self, cat_type, old_name, new_name):
+        clean_cat = (new_name or "").strip()
+        if not clean_cat or clean_cat == old_name:
+            return False
+        options = self.default_cat_general_options if cat_type == "general" else self.default_cat_specific_options
+        if old_name not in options or clean_cat in options:
+            return False
+        options[options.index(old_name)] = clean_cat
+        if clean_cat not in CATEGORY_COLORS:
+            CATEGORY_COLORS[clean_cat] = CATEGORY_COLORS.get(old_name, BASE_CATEGORY_COLORS.get(old_name, ("#F3F4F6", "#374151")))
+        if old_name in self.settings_category_colors and clean_cat not in self.settings_category_colors:
+            self.settings_category_colors[clean_cat] = self.settings_category_colors[old_name]
+        self._save_category_settings()
+        self._rebuild_category_options()
+        self.refresh_all_combos()
+        return True
+
+    def delete_default_category(self, cat_type, cat_name):
+        options = self.default_cat_general_options if cat_type == "general" else self.default_cat_specific_options
+        if cat_name not in options:
+            return False
+        options.remove(cat_name)
+        self._save_category_settings()
+        self._rebuild_category_options()
+        self.refresh_all_combos()
+        return True
+
+    def set_category_color(self, cat_name, background):
+        if not cat_name:
+            return
+        bg_color = QColor(background)
+        if not bg_color.isValid():
+            return
+        bg = bg_color.name().upper()
+        fg = self._category_foreground_for_background(bg)
+        colors = (bg, fg)
+        self.settings_category_colors[cat_name] = colors
+        CATEGORY_COLORS[cat_name] = colors
+        if cat_name in self.custom_category_colors:
+            self.custom_category_colors[cat_name] = colors
+        self._save_category_settings()
+        self.refresh_all_combos()
+        if self.view_mode == "category":
+            self.build_category_view()
 
     def _category_color_distance(self, first_color, second_color):
         first = QColor(first_color)
@@ -1462,11 +1752,7 @@ class TimeStudyApp(QMainWindow):
                 self.custom_spec_cats.add(cat)
                 self._ensure_category_color(cat)
 
-        self.cat_general_options.sort()
-        self.cat_specific_options.sort(key=lambda x: (
-            self.default_cat_specific_options.index(x) if x in self.default_cat_specific_options else 999,
-            x.lower()
-        ))
+        self._sort_category_options()
 
     def _scan_and_add_custom_categories(self, groups_data):
         for g_data in groups_data:
@@ -1484,11 +1770,7 @@ class TimeStudyApp(QMainWindow):
                     self.custom_spec_cats.add(cat_spec)
                     self._ensure_category_color(cat_spec)
 
-        self.cat_general_options.sort()
-        self.cat_specific_options.sort(key=lambda x: (
-            self.default_cat_specific_options.index(x) if x in self.default_cat_specific_options else 999,
-            x.lower()
-        ))
+        self._sort_category_options()
 
     def parse_time_ms(self, ms_val, time_str):
         if time_str:
@@ -1615,6 +1897,9 @@ class TimeStudyApp(QMainWindow):
         self.redo_action.setEnabled(False)
         self.redo_action.triggered.connect(self.redo)
         edit_menu.addAction(self.redo_action)
+        self.view_wi_action = QAction("View WI", self)
+        self.view_wi_action.setEnabled(False)
+        self.view_wi_action.triggered.connect(self.view_work_instruction)
 
         self.settings_button = QToolButton(self)
         self.settings_button.setText("⚙")
@@ -1628,6 +1913,7 @@ class TimeStudyApp(QMainWindow):
         menu_bar.setCornerWidget(self.settings_button, Qt.TopRightCorner)
 
         toolbar = QToolBar("Main Toolbar", self)
+        self.main_toolbar = toolbar
         toolbar.setMovable(False)
         toolbar.setStyleSheet("""
             QToolBar { border: none; background: transparent; spacing: 6px; padding: 2px 6px; }
@@ -1638,6 +1924,9 @@ class TimeStudyApp(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.undo_action)
         toolbar.addAction(self.redo_action)
+        toolbar.addAction(self.view_wi_action)
+        if hasattr(self, "app_stack") and self.app_stack.currentWidget() is self.home_page:
+            toolbar.hide()
 
     def open_settings(self):
         SettingsDialog(self).exec_()
@@ -1652,10 +1941,176 @@ class TimeStudyApp(QMainWindow):
         self.settings.setValue("wi/auto_open_on_startup", enabled)
         self.settings.sync()
 
+    def set_dark_mode(self, enabled):
+        self.dark_mode = enabled
+        self.settings.setValue("ui/dark_mode", enabled)
+        self.settings.sync()
+        self.apply_theme()
+
+    def apply_theme(self):
+        if self.dark_mode:
+            self.setStyleSheet("""
+                QMainWindow { background-color: #111827; color: #E5E7EB; }
+                QWidget { background-color: #111827; color: #E5E7EB; }
+                QLabel { color: #E5E7EB; }
+                QTreeWidget, QTreeView, QComboBox, QLineEdit, QTextEdit, QPlainTextEdit {
+                    background-color: #1F2937; color: #F3F4F6; border: 1px solid #374151;
+                }
+                QPushButton { background-color: #1F2937; color: #F3F4F6; border: 1px solid #4B5563; }
+                QGroupBox { color: #E5E7EB; }
+            """)
+        else:
+            self.setStyleSheet("")
+
+    def _recent_project_paths(self):
+        recent = self.settings.value("projects/recent", [], type=list)
+        if isinstance(recent, str):
+            recent = [recent]
+        return [path for path in recent if path and os.path.exists(path)]
+
+    def _remember_recent_project(self, path):
+        if not path:
+            return
+        path = os.path.abspath(path)
+        recent = [p for p in self._recent_project_paths() if os.path.abspath(p) != path]
+        recent.insert(0, path)
+        self.settings.setValue("projects/recent", recent[:4])
+        self.settings.sync()
+        self.refresh_home_recent_projects()
+
+    def _create_home_button(self, text, callback, is_primary=False):
+        btn = QPushButton(text)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFocusPolicy(Qt.NoFocus)
+        btn.setMinimumHeight(38 if not is_primary else 124)
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 2px solid #202020;
+                color: #202020;
+                font-size: 14px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #E8E8E8;
+            }
+            QPushButton:pressed {
+                background-color: #DADADA;
+            }
+        """)
+        btn.clicked.connect(callback)
+        return btn
+
+    def create_home_screen(self):
+        page = QWidget()
+        page.setObjectName("homeScreen")
+        page.setStyleSheet("""
+            QWidget#homeScreen { background-color: #F1F1F1; }
+            QLabel#homeTitle { color: #202020; font-size: 25px; letter-spacing: 0px; }
+            QLabel#recentTitle { color: #202020; font-size: 14px; }
+        """)
+
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(32, 22, 32, 22)
+
+        frame = QWidget()
+        frame.setStyleSheet("border: 2px solid #202020;")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+
+        content = QWidget()
+        content.setStyleSheet("border: none;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setAlignment(Qt.AlignCenter)
+        content_layout.setSpacing(36)
+
+        title = QLabel("TIMESTUDY TOOL")
+        title.setObjectName("homeTitle")
+        title.setAlignment(Qt.AlignCenter)
+        content_layout.addWidget(title)
+
+        menu_row = QHBoxLayout()
+        menu_row.setAlignment(Qt.AlignCenter)
+        menu_row.setSpacing(14)
+
+        left_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        open_btn = self._create_home_button("Open Project", self.open_project_dialog, is_primary=True)
+        new_btn = self._create_home_button("New Project", self.new_project)
+        left_col.addWidget(open_btn)
+        left_col.addWidget(new_btn)
+        menu_row.addLayout(left_col)
+
+        right_col = QVBoxLayout()
+        right_col.setSpacing(6)
+        recent_title = QLabel("Recent Projects")
+        recent_title.setObjectName("recentTitle")
+        recent_title.setAlignment(Qt.AlignCenter)
+        right_col.addWidget(recent_title)
+        self.home_recent_buttons = []
+        for _ in range(4):
+            recent_btn = self._create_home_button("", lambda: None)
+            recent_btn.setMinimumWidth(178)
+            self.home_recent_buttons.append(recent_btn)
+            right_col.addWidget(recent_btn)
+        menu_row.addLayout(right_col)
+
+        content_layout.addLayout(menu_row)
+        frame_layout.addWidget(content)
+        outer.addWidget(frame)
+        self.refresh_home_recent_projects()
+        return page
+
+    def refresh_home_recent_projects(self):
+        if not hasattr(self, "home_recent_buttons"):
+            return
+        recent = self._recent_project_paths()[:4]
+        for index, btn in enumerate(self.home_recent_buttons):
+            if index < len(recent):
+                path = recent[index]
+                btn.setText(os.path.splitext(os.path.basename(path))[0])
+                btn.setToolTip(path)
+                btn.setEnabled(True)
+                btn.clicked.disconnect()
+                btn.clicked.connect(lambda _, p=path: self.open_recent_project(p))
+            else:
+                btn.setText("Recent Project")
+                btn.setToolTip("")
+                btn.setEnabled(False)
+
+    def show_editor_screen(self):
+        if hasattr(self, "app_stack"):
+            self.app_stack.setCurrentWidget(self.editor_page)
+        if hasattr(self, "main_toolbar"):
+            self.main_toolbar.show()
+
+    def open_recent_project(self, path):
+        if self.unsaved_changes:
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved changes. Do you want to save before opening a new project?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+            if reply == QMessageBox.Save:
+                if not self.save_project():
+                    return
+            elif reply == QMessageBox.Cancel:
+                return
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "Recent Project", f"Project file not found:\n{path}")
+            self.refresh_home_recent_projects()
+            return
+        self._open_project_path(path)
+
     def init_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
+        self.app_stack = QStackedWidget()
+        self.setCentralWidget(self.app_stack)
+        self.home_page = self.create_home_screen()
+        self.editor_page = QWidget()
+        self.app_stack.addWidget(self.home_page)
+        self.app_stack.addWidget(self.editor_page)
+        self.app_stack.setCurrentWidget(self.home_page)
+        main_layout = QHBoxLayout(self.editor_page)
 
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -3154,6 +3609,8 @@ class TimeStudyApp(QMainWindow):
             self.video_tree.editItem(item, column)
 
     def add_video_group(self, file_path, existing_rows=None, default_duration_ms=0, target_ms=0):
+        if not self.is_restoring_state:
+            self.show_editor_screen()
         if not self.is_restoring_state: self.push_state()
         duration_ms = default_duration_ms
         video_available = False
@@ -3388,6 +3845,7 @@ class TimeStudyApp(QMainWindow):
         self.custom_gen_cats.clear()
         self.custom_spec_cats.clear()
         self._clear_custom_category_colors()
+        self._reset_category_options_to_defaults()
         
         self.project_path = ""
         self.active_video_path = ""
@@ -3400,6 +3858,7 @@ class TimeStudyApp(QMainWindow):
         self.proj_status_label.setText("Project: Unsaved")
         self.time_label.setText("00:00 / 00:00 (◄ / ► Arrow Keys = ±1s)")
         self.unsaved_changes = False
+        self.show_editor_screen()
 
     def _event_belongs_to_wi(self, obj):
         if self.wi_window is None:
@@ -3446,6 +3905,7 @@ class TimeStudyApp(QMainWindow):
             self.wi_window.raise_()
             self.wi_window.activateWindow()
             self.wi_window.focus_viewer()
+        self.update_work_instruction_action()
         return True
 
     def close_work_instruction(self):
@@ -3453,6 +3913,23 @@ class TimeStudyApp(QMainWindow):
         if self.wi_window is not None:
             self.wi_window.close()
             self.wi_window = None
+        self.update_work_instruction_action()
+
+    def update_work_instruction_action(self):
+        if hasattr(self, "view_wi_action"):
+            self.view_wi_action.setEnabled(bool(self.wi_path))
+
+    def view_work_instruction(self):
+        if not self.wi_path:
+            QMessageBox.information(self, "Work Instructions", "No Work Instruction is linked to this project.")
+            return
+        if self.wi_window is not None and self.wi_window.doc:
+            self.wi_window.show()
+            self.wi_window.raise_()
+            self.wi_window.activateWindow()
+            self.wi_window.focus_viewer()
+            return
+        self.load_work_instruction(self.wi_path, show=True)
 
     def jump_wi_to_slide(self, slide_value):
         if self.auto_jump_to_slide and self.wi_window is not None and self.wi_window.doc:
@@ -3522,6 +3999,7 @@ class TimeStudyApp(QMainWindow):
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
         self.proj_status_label.setText(f"Project: {filename}")
         self.unsaved_changes = False
+        self._remember_recent_project(path)
         return True
 
     def open_project_dialog(self):
@@ -3539,6 +4017,9 @@ class TimeStudyApp(QMainWindow):
 
         path, _ = QFileDialog.getOpenFileName(self, "Open Project", self._default_browse_dir(), "Time Study Project (*.tsproject *.json);;All Files (*)")
         if not path: return
+        self._open_project_path(path)
+
+    def _open_project_path(self, path):
         self.toggle_view_mode(0)
         progress = QProgressDialog(self)
         progress.setWindowTitle("Loading")
@@ -3562,6 +4043,9 @@ class TimeStudyApp(QMainWindow):
         self.project_path = path
         
         self._clear_custom_category_colors()
+        self.custom_gen_cats.clear()
+        self.custom_spec_cats.clear()
+        self._reset_category_options_to_defaults()
         self._load_saved_category_colors(data.get("custom_category_colors", {}))
         self._load_custom_categories(data.get("custom_gen_cats", []), data.get("custom_spec_cats", []))
 
@@ -3600,6 +4084,7 @@ class TimeStudyApp(QMainWindow):
         if wi_stored:
             resolved_wi_path = self._resolve_project_path(wi_stored, path)
             self.wi_path = resolved_wi_path
+            self.update_work_instruction_action()
             if self.auto_open_wi_on_startup:
                 self.load_work_instruction(resolved_wi_path, show=True)
 
@@ -3607,10 +4092,13 @@ class TimeStudyApp(QMainWindow):
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
         self.proj_status_label.setText(f"Project: {filename}")
         self.unsaved_changes = False
+        self._remember_recent_project(path)
+        self.show_editor_screen()
 
     def import_project_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Project File", self._default_browse_dir(), "Time Study Project (*.tsproject *.json);;All Files (*)")
         if not path: return
+        self.show_editor_screen()
         self.toggle_view_mode(0)
         progress = QProgressDialog(self)
         progress.setWindowTitle("Importing")
@@ -3677,6 +4165,7 @@ class TimeStudyApp(QMainWindow):
         filename = os.path.basename(path)
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
         self.proj_status_label.setText(f"Project: {filename}")
+        self._remember_recent_project(path)
 
     def export_to_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export to CSV", self._default_browse_dir(), "CSV Files (*.csv)")
