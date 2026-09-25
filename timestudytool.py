@@ -993,13 +993,11 @@ class SettingsDialog(QDialog):
         self.categories = QListWidget()
         self.categories.setFixedWidth(215)
         self.categories.addItem("WI pop-out")
-        self.categories.addItem("Appearance")
         self.categories.addItem("Categories")
         layout.addWidget(self.categories)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self._build_wi_page(app))
-        self.pages.addWidget(self._build_appearance_page(app))
         self.pages.addWidget(self._build_categories_page(app))
         layout.addWidget(self.pages, 1)
 
@@ -1036,37 +1034,6 @@ class SettingsDialog(QDialog):
             "Open the saved WI pop-out automatically when a project is loaded.",
             app.auto_open_wi_on_startup,
             app.set_auto_open_wi_on_startup,
-        )
-
-        content_layout.addStretch()
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.accept)
-        button_layout.addWidget(close_button)
-        content_layout.addLayout(button_layout)
-        return content
-
-    def _build_appearance_page(self, app):
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(32, 26, 32, 24)
-        content_layout.setSpacing(18)
-
-        title = QLabel("Appearance")
-        title.setObjectName("settingsTitle")
-        content_layout.addWidget(title)
-
-        section = QLabel("THEME")
-        section.setObjectName("settingsSection")
-        content_layout.addWidget(section)
-
-        self.dark_mode_checkbox = self._add_setting(
-            content_layout,
-            "Dark mode",
-            "Use a darker interface for the main application window.",
-            app.dark_mode,
-            app.set_dark_mode,
         )
 
         content_layout.addStretch()
@@ -1220,7 +1187,7 @@ class TimeStudyApp(QMainWindow):
         self.settings = QSettings("TimeStudyTool", "TimeStudyTool")
         self.auto_jump_to_slide = self.settings.value("wi/auto_jump_to_slide", True, type=bool)
         self.auto_open_wi_on_startup = self.settings.value("wi/auto_open_on_startup", True, type=bool)
-        self.dark_mode = self.settings.value("ui/dark_mode", False, type=bool)
+        self.settings.remove("ui/dark_mode")
 
         self.unsaved_changes = False
         self.view_mode = "video"
@@ -1274,7 +1241,6 @@ class TimeStudyApp(QMainWindow):
 
         self.init_ui()
         self.create_menu_bar()
-        self.apply_theme()
         QApplication.instance().installEventFilter(self)
         
         # Add to the end of def __init__(self):
@@ -1943,27 +1909,6 @@ class TimeStudyApp(QMainWindow):
         self.settings.setValue("wi/auto_open_on_startup", enabled)
         self.settings.sync()
 
-    def set_dark_mode(self, enabled):
-        self.dark_mode = enabled
-        self.settings.setValue("ui/dark_mode", enabled)
-        self.settings.sync()
-        self.apply_theme()
-
-    def apply_theme(self):
-        if self.dark_mode:
-            self.setStyleSheet("""
-                QMainWindow { background-color: #111827; color: #E5E7EB; }
-                QWidget { background-color: #111827; color: #E5E7EB; }
-                QLabel { color: #E5E7EB; }
-                QTreeWidget, QTreeView, QComboBox, QLineEdit, QTextEdit, QPlainTextEdit {
-                    background-color: #1F2937; color: #F3F4F6; border: 1px solid #374151;
-                }
-                QPushButton { background-color: #1F2937; color: #F3F4F6; border: 1px solid #4B5563; }
-                QGroupBox { color: #E5E7EB; }
-            """)
-        else:
-            self.setStyleSheet("")
-
     def _recent_project_paths(self):
         recent = self.settings.value("projects/recent", [], type=list)
         if isinstance(recent, str):
@@ -1980,25 +1925,51 @@ class TimeStudyApp(QMainWindow):
         self.settings.sync()
         self.refresh_home_recent_projects()
 
-    def _create_home_button(self, text, callback, is_primary=False):
+    def _create_home_button(self, text, callback, is_primary=False, variant="recent", icon=None):
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.NoFocus)
         btn.setMinimumHeight(38 if not is_primary else 124)
-        btn.setStyleSheet("""
-            QPushButton {
+        if icon is not None:
+            btn.setIcon(icon)
+        if variant == "open":
+            bg_color = "#2563EB"
+            hover_color = "#1D4ED8"
+            pressed_color = "#1E40AF"
+            text_color = "#FFFFFF"
+            border_color = "#1D4ED8"
+        elif variant == "new":
+            bg_color = "#16A34A"
+            hover_color = "#15803D"
+            pressed_color = "#166534"
+            text_color = "#FFFFFF"
+            border_color = "#15803D"
+        else:
+            bg_color = "transparent"
+            hover_color = "#E8E8E8"
+            pressed_color = "#DADADA"
+            text_color = "#202020"
+            border_color = "#202020"
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {bg_color};
+                border: 2px solid {border_color};
+                color: {text_color};
+                font-size: 14px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {hover_color};
+            }}
+            QPushButton:pressed {{
+                background-color: {pressed_color};
+            }}
+            QPushButton:disabled {{
                 background-color: transparent;
                 border: 2px solid #202020;
                 color: #202020;
-                font-size: 14px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #E8E8E8;
-            }
-            QPushButton:pressed {
-                background-color: #DADADA;
-            }
+            }}
         """)
         btn.clicked.connect(callback)
         return btn
@@ -2037,13 +2008,18 @@ class TimeStudyApp(QMainWindow):
 
         left_col = QVBoxLayout()
         left_col.setSpacing(6)
-        open_btn = self._create_home_button("Open Project", self.open_project_dialog, is_primary=True)
-        new_btn = self._create_home_button("New Project", self.new_project)
+        open_icon = self.style().standardIcon(QStyle.SP_DirOpenIcon)
+        new_icon = self.style().standardIcon(QStyle.SP_FileIcon)
+        open_btn = self._create_home_button("Open Project", self.open_project_dialog, is_primary=True, variant="open", icon=open_icon)
+        new_btn = self._create_home_button("New Project", self.new_project, variant="new", icon=new_icon)
         left_col.addWidget(open_btn)
         left_col.addWidget(new_btn)
         menu_row.addLayout(left_col)
 
-        right_col = QVBoxLayout()
+        self.home_recent_widget = QWidget()
+        self.home_recent_widget.setStyleSheet("border: none;")
+        right_col = QVBoxLayout(self.home_recent_widget)
+        right_col.setContentsMargins(0, 0, 0, 0)
         right_col.setSpacing(6)
         recent_title = QLabel("Recent Projects")
         recent_title.setObjectName("recentTitle")
@@ -2055,7 +2031,7 @@ class TimeStudyApp(QMainWindow):
             recent_btn.setMinimumWidth(178)
             self.home_recent_buttons.append(recent_btn)
             right_col.addWidget(recent_btn)
-        menu_row.addLayout(right_col)
+        menu_row.addWidget(self.home_recent_widget)
 
         content_layout.addLayout(menu_row)
         frame_layout.addWidget(content)
@@ -2067,18 +2043,22 @@ class TimeStudyApp(QMainWindow):
         if not hasattr(self, "home_recent_buttons"):
             return
         recent = self._recent_project_paths()[:4]
+        if hasattr(self, "home_recent_widget"):
+            self.home_recent_widget.setVisible(bool(recent))
         for index, btn in enumerate(self.home_recent_buttons):
             if index < len(recent):
                 path = recent[index]
                 btn.setText(os.path.splitext(os.path.basename(path))[0])
                 btn.setToolTip(path)
                 btn.setEnabled(True)
+                btn.setVisible(True)
                 btn.clicked.disconnect()
                 btn.clicked.connect(lambda _, p=path: self.open_recent_project(p))
             else:
-                btn.setText("Recent Project")
+                btn.setText("")
                 btn.setToolTip("")
                 btn.setEnabled(False)
+                btn.setVisible(False)
 
     def show_editor_screen(self):
         if hasattr(self, "app_stack"):
