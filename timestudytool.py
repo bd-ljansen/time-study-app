@@ -1891,6 +1891,10 @@ class TimeStudyApp(QMainWindow):
             QToolButton:disabled { color: #94A3B8; background-color: #F1F5F9; }
         """)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.home_action = QAction(self.style().standardIcon(QStyle.SP_DirHomeIcon), "Home", self)
+        self.home_action.setToolTip("Return to Home")
+        self.home_action.triggered.connect(self.go_home)
+        toolbar.addAction(self.home_action)
         toolbar.addAction(self.undo_action)
         toolbar.addAction(self.redo_action)
         toolbar.addAction(self.view_wi_action)
@@ -2081,6 +2085,24 @@ class TimeStudyApp(QMainWindow):
             self.app_stack.setCurrentWidget(self.editor_page)
         if hasattr(self, "main_toolbar"):
             self.main_toolbar.show()
+
+    def go_home(self):
+        if self.unsaved_changes:
+            reply = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved changes. Do you want to save before returning to the home page?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel
+            )
+            if reply == QMessageBox.Save:
+                if not self.save_project():
+                    return
+            elif reply == QMessageBox.Cancel:
+                return
+            else:
+                self.unsaved_changes = False
+
+        self.app_stack.setCurrentWidget(self.home_page)
+        self.main_toolbar.hide()
 
     def open_recent_project(self, path):
         if self.unsaved_changes:
