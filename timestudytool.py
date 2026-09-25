@@ -487,6 +487,7 @@ class WorkInstructionWindow(QWidget):
         self.doc = None
         self.pdf_path = ""
         self.page_index = 0
+        self.user_zoom = 1.0
         self._rendered_width = 0
 
         layout = QVBoxLayout(self)
@@ -495,6 +496,7 @@ class WorkInstructionWindow(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
         self.scroll.setAlignment(Qt.AlignCenter)
+        self.scroll.setFocusPolicy(Qt.NoFocus)  # keep key events on the window so arrows page slides
         self.scroll.setStyleSheet("background-color: #3A3A3A; border: 1px solid #222222;")
         self.page_label = QLabel("No Work Instruction loaded.")
         self.page_label.setAlignment(Qt.AlignCenter)
@@ -512,12 +514,31 @@ class WorkInstructionWindow(QWidget):
         self.next_btn.clicked.connect(lambda: self.step_page(1))
         nav.addWidget(self.next_btn)
         nav.addStretch()
+        self.zoom_out_btn = QPushButton("−")
+        self.zoom_out_btn.setFocusPolicy(Qt.NoFocus)
+        self.zoom_out_btn.setFixedWidth(32)
+        self.zoom_out_btn.setToolTip("Zoom out (Ctrl+Scroll / Ctrl+-)")
+        self.zoom_out_btn.clicked.connect(lambda: self.adjust_zoom(1 / 1.15))
+        nav.addWidget(self.zoom_out_btn)
+        self.zoom_reset_btn = QPushButton("Fit")
+        self.zoom_reset_btn.setFocusPolicy(Qt.NoFocus)
+        self.zoom_reset_btn.setToolTip("Reset zoom to fit width (Ctrl+0)")
+        self.zoom_reset_btn.clicked.connect(self.reset_zoom)
+        nav.addWidget(self.zoom_reset_btn)
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_in_btn.setFocusPolicy(Qt.NoFocus)
+        self.zoom_in_btn.setFixedWidth(32)
+        self.zoom_in_btn.setToolTip("Zoom in (Ctrl+Scroll / Ctrl++)")
+        self.zoom_in_btn.clicked.connect(lambda: self.adjust_zoom(1.15))
+        nav.addWidget(self.zoom_in_btn)
+        nav.addSpacing(12)
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("font-weight: bold; color: #1E293B; font-size: 13px;")
         nav.addWidget(self.status_label)
         layout.addLayout(nav)
 
         self.scroll.viewport().installEventFilter(self)
+        self.page_label.installEventFilter(self)
 
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
@@ -559,19 +580,32 @@ class WorkInstructionWindow(QWidget):
     def step_page(self, delta):
         self.goto_page(self.page_index + delta)
 
+    def adjust_zoom(self, factor):
+        new_zoom = max(0.25, min(6.0, self.user_zoom * factor))
+        if abs(new_zoom - self.user_zoom) < 1e-6:
+            return
+        self.user_zoom = new_zoom
+        self.render_page()
+
+    def reset_zoom(self):
+        self.user_zoom = 1.0
+        self.render_page()
+
     def render_page(self):
         if not self.doc or self.page_count() == 0:
             return
         page = self.doc[self.page_index]
-        avail_w = max(200, self.scroll.viewport().width() - 4)
-        zoom = avail_w / page.rect.width if page.rect.width else 1.0
+        fit_w = max(200, self.scroll.viewport().width() - 4)
+        target_w = fit_w * self.user_zoom
+        zoom = target_w / page.rect.width if page.rect.width else 1.0
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
         img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(img.copy())
         self.page_label.setPixmap(pixmap)
         self.page_label.resize(pixmap.size())
-        self._rendered_width = avail_w
-        self.status_label.setText(f"Slide {self.page_index + 1} / {self.page_count()}")
+        self._rendered_width = fit_w
+        zoom_txt = "" if abs(self.user_zoom - 1.0) < 1e-6 else f"  ({self.user_zoom * 100:.0f}%)"
+        self.status_label.setText(f"Slide {self.page_index + 1} / {self.page_count()}{zoom_txt}")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -579,18 +613,34 @@ class WorkInstructionWindow(QWidget):
             self._resize_timer.start(120)
 
     def eventFilter(self, obj, event):
-        if obj is self.scroll.viewport() and event.type() == QEvent.Wheel and self.doc:
-            delta = event.angleDelta().y()
-            bar = self.scroll.verticalScrollBar()
-            at_end = delta < 0 and bar.value() >= bar.maximum()
-            at_start = delta > 0 and bar.value() <= bar.minimum()
-            if at_end or at_start:
-                self.step_page(1 if delta < 0 else -1)
+        if obj in (self.scroll.viewport(), self.page_label) and self.doc:
+            if event.type() == QEvent.Wheel:
+                delta = event.angleDelta().y()
+                if event.modifiers() & Qt.ControlModifier:
+                    if delta:
+                        self.adjust_zoom(1.15 if delta > 0 else 1 / 1.15)
+                    return True
+                bar = self.scroll.verticalScrollBar()
+                at_end = delta < 0 and bar.value() >= bar.maximum()
+                at_start = delta > 0 and bar.value() <= bar.minimum()
+                if at_end or at_start:
+                    self.step_page(1 if delta < 0 else -1)
+                    return True
+            elif event.type() == QEvent.KeyPress and self.handle_nav_key(event.key(), event.modifiers()):
                 return True
         return super().eventFilter(obj, event)
 
-    def keyPressEvent(self, event):
-        key = event.key()
+    def handle_nav_key(self, key, modifiers=Qt.NoModifier):
+        if modifiers & Qt.ControlModifier:
+            if key in (Qt.Key_Plus, Qt.Key_Equal):
+                self.adjust_zoom(1.15)
+            elif key in (Qt.Key_Minus, Qt.Key_Underscore):
+                self.adjust_zoom(1 / 1.15)
+            elif key == Qt.Key_0:
+                self.reset_zoom()
+            else:
+                return False
+            return True
         if key in (Qt.Key_Left, Qt.Key_PageUp, Qt.Key_Backspace):
             self.step_page(-1)
         elif key in (Qt.Key_Right, Qt.Key_PageDown, Qt.Key_Space):
@@ -600,6 +650,11 @@ class WorkInstructionWindow(QWidget):
         elif key == Qt.Key_End:
             self.goto_page(self.page_count() - 1)
         else:
+            return False
+        return True
+
+    def keyPressEvent(self, event):
+        if not self.handle_nav_key(event.key(), event.modifiers()):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
@@ -1064,7 +1119,7 @@ class TimeStudyApp(QMainWindow):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress:
             # The WI pop-out owns its own arrow-key navigation while it is focused.
-            if self.wi_window is not None and self.wi_window.isActiveWindow():
+            if self.wi_window is not None and self._event_belongs_to_wi(obj):
                 return super().eventFilter(obj, event)
             focused = QApplication.focusWidget()
             key = event.key()
@@ -2932,6 +2987,11 @@ class TimeStudyApp(QMainWindow):
         self.time_label.setText("00:00 / 00:00 (◄ / ► Arrow Keys = ±1s)")
         self.unsaved_changes = False
 
+    def _event_belongs_to_wi(self, obj):
+        if self.wi_window is None or not isinstance(obj, QWidget):
+            return False
+        return obj is self.wi_window or self.wi_window.isAncestorOf(obj)
+
     def open_work_instruction(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open Work Instruction PDF", self._default_browse_dir(), "PDF Files (*.pdf)")
         if not path: return
@@ -2958,6 +3018,7 @@ class TimeStudyApp(QMainWindow):
             self.wi_window.show()
             self.wi_window.raise_()
             self.wi_window.activateWindow()
+            self.wi_window.setFocus()
         return True
 
     def close_work_instruction(self):
