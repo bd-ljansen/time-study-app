@@ -1934,7 +1934,10 @@ class TimeStudyApp(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         home_icon_path = os.path.join(SCRIPT_DIR, "assets", "home_icon.png")
         if os.path.exists(home_icon_path):
-            home_icon = QIcon(home_icon_path)
+            pixmap = QPixmap(home_icon_path)
+            # Scale icon to match toolbar button size (24x24)
+            scaled_pixmap = pixmap.scaledToHeight(24, Qt.SmoothTransformation)
+            home_icon = QIcon(scaled_pixmap)
         else:
             home_icon = self.style().standardIcon(QStyle.SP_FileDialogStart)
         self.home_action = QAction(home_icon, "", self)
