@@ -19,7 +19,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QSlider, QTreeWidget, QTreeWidgetItem, QFileDialog,
     QLabel, QHeaderView, QComboBox, QGraphicsView, QGraphicsScene, 
     QGraphicsPixmapItem, QLineEdit, QTextEdit, QMessageBox, QAction,
@@ -2004,11 +2004,17 @@ class TimeStudyApp(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         content_layout.addWidget(title)
 
-        menu_row = QHBoxLayout()
-        menu_row.setAlignment(Qt.AlignCenter)
-        menu_row.setSpacing(14)
+        menu_widget = QWidget()
+        menu_widget.setStyleSheet("border: none;")
+        menu_grid = QGridLayout(menu_widget)
+        menu_grid.setContentsMargins(0, 0, 0, 0)
+        menu_grid.setHorizontalSpacing(14)
+        menu_grid.setVerticalSpacing(6)
 
-        left_col = QVBoxLayout()
+        left_actions = QWidget()
+        left_actions.setStyleSheet("border: none;")
+        left_col = QVBoxLayout(left_actions)
+        left_col.setContentsMargins(0, 0, 0, 0)
         left_col.setSpacing(6)
         left_col.setAlignment(Qt.AlignTop)
         open_icon = self.style().standardIcon(QStyle.SP_DirOpenIcon)
@@ -2017,17 +2023,12 @@ class TimeStudyApp(QMainWindow):
         new_btn = self._create_home_button("New Project", self.new_project, variant="new", icon=new_icon)
         left_col.addWidget(open_btn)
         left_col.addWidget(new_btn)
-        menu_row.addLayout(left_col)
+        menu_grid.addWidget(left_actions, 1, 0, Qt.AlignTop)
 
-        self.home_recent_widget = QWidget()
-        self.home_recent_widget.setStyleSheet("border: none;")
-        right_col = QVBoxLayout(self.home_recent_widget)
-        right_col.setContentsMargins(0, 0, 0, 0)
-        right_col.setSpacing(6)
-        recent_title = QLabel("Recent Projects")
-        recent_title.setObjectName("recentTitle")
-        recent_title.setAlignment(Qt.AlignCenter)
-        right_col.addWidget(recent_title)
+        self.home_recent_title = QLabel("Recent Projects")
+        self.home_recent_title.setObjectName("recentTitle")
+        self.home_recent_title.setAlignment(Qt.AlignCenter)
+        menu_grid.addWidget(self.home_recent_title, 0, 1, Qt.AlignCenter)
         self.home_recent_grid = QWidget()
         self.home_recent_grid.setStyleSheet("border: none;")
         recent_grid_layout = QVBoxLayout(self.home_recent_grid)
@@ -2039,10 +2040,10 @@ class TimeStudyApp(QMainWindow):
             recent_btn.setMinimumWidth(178)
             self.home_recent_buttons.append(recent_btn)
             recent_grid_layout.addWidget(recent_btn)
-        right_col.addWidget(self.home_recent_grid)
-        menu_row.addWidget(self.home_recent_widget)
+        self.home_recent_widget = self.home_recent_grid
+        menu_grid.addWidget(self.home_recent_grid, 1, 1, Qt.AlignTop)
 
-        content_layout.addLayout(menu_row)
+        content_layout.addWidget(menu_widget, 0, Qt.AlignCenter)
         frame_layout.addWidget(content)
         outer.addWidget(frame)
         self.refresh_home_recent_projects()
@@ -2054,6 +2055,8 @@ class TimeStudyApp(QMainWindow):
         recent = self._recent_project_paths()[:4]
         if hasattr(self, "home_recent_widget"):
             self.home_recent_widget.setVisible(bool(recent))
+        if hasattr(self, "home_recent_title"):
+            self.home_recent_title.setVisible(bool(recent))
         for index, btn in enumerate(self.home_recent_buttons):
             if index < len(recent):
                 path = recent[index]
