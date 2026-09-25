@@ -630,7 +630,19 @@ class WorkInstructionWindow(QWidget):
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setMinimumWidth(150)
         self.status_label.setStyleSheet("font-weight: bold; color: #1E293B; font-size: 13px;")
+        self.status_label.setToolTip("Double-click to go to a slide")
+        self.status_label.installEventFilter(self)
         nav.addWidget(self.status_label)
+        self.slide_editor = QLineEdit()
+        self.slide_editor.setAlignment(Qt.AlignCenter)
+        self.slide_editor.setMinimumWidth(150)
+        self.slide_editor.setStyleSheet("font-weight: bold; color: #1E293B; font-size: 13px;")
+        self.slide_editor.setToolTip("Enter a slide number")
+        self.slide_editor.returnPressed.connect(self.finish_slide_edit)
+        self.slide_editor.editingFinished.connect(self.finish_slide_edit)
+        self.slide_editor.installEventFilter(self)
+        self.slide_editor.hide()
+        nav.addWidget(self.slide_editor)
         self.next_btn = QPushButton("Next Slide ►")
         self.next_btn.setFocusPolicy(Qt.NoFocus)
         self.next_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -793,11 +805,32 @@ class WorkInstructionWindow(QWidget):
         bar.setValue(bar.value() + pixels)
 
     def update_status(self):
+        if self.slide_editor.isVisible():
+            return
         if not self.doc:
             self.status_label.setText("No Work Instruction loaded.")
             return
         zoom_txt = "" if abs(self.user_zoom - 1.0) < 1e-6 else f"  ({self.user_zoom * 100:.0f}%)"
         self.status_label.setText(f"Slide {self.current_page() + 1} / {self.page_count()}{zoom_txt}")
+
+    def start_slide_edit(self):
+        if not self.doc:
+            return
+        self.status_label.hide()
+        self.slide_editor.setText(str(self.current_page() + 1))
+        self.slide_editor.show()
+        self.slide_editor.selectAll()
+        self.slide_editor.setFocus()
+
+    def finish_slide_edit(self):
+        if not self.slide_editor.isVisible():
+            return
+        slide_value = self.slide_editor.text().strip()
+        self.slide_editor.hide()
+        self.status_label.show()
+        if slide_value.isdigit() and int(slide_value) >= 1:
+            self.goto_slide(slide_value)
+        self.update_status()
 
     # ---------- zoom ----------
 
@@ -885,6 +918,14 @@ class WorkInstructionWindow(QWidget):
     # ---------- input ----------
 
     def eventFilter(self, obj, event):
+        if obj is self.status_label and event.type() == QEvent.MouseButtonDblClick:
+            self.start_slide_edit()
+            return True
+        if obj is self.slide_editor and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.slide_editor.hide()
+            self.status_label.show()
+            self.update_status()
+            return True
         if obj in (self.scroll.viewport(), self.canvas) and self.doc:
             if event.type() == QEvent.Wheel:
                 delta = event.angleDelta().y() or event.angleDelta().x()
