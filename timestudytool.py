@@ -1820,7 +1820,7 @@ class TimeStudyApp(QMainWindow):
         v_header.setSectionResizeMode(2, QHeaderView.Interactive)
         v_header.setSectionResizeMode(3, QHeaderView.Stretch)
         v_header.setSectionResizeMode(4, QHeaderView.Interactive)
-        self.video_tree.setColumnWidth(0, 80)
+        self.video_tree.setColumnWidth(0, 110)
         self.video_tree.setColumnWidth(1, 120)
         self.video_tree.setColumnWidth(2, 220)
         self.video_tree.setColumnWidth(4, 160)
