@@ -475,8 +475,99 @@ class ParetoChartWidget(QWidget):
         return f"{minutes:02d}:{seconds:02d}"
 
 
+class PdfCanvas(QWidget):
+    """Continuous vertical strip of all PDF pages, with drag text selection."""
+
+    SELECTION_COLOR = QColor(51, 133, 255, 90)
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setCursor(Qt.IBeamCursor)
+        self.setMouseTracking(False)
+        self.sel_anchor = None  # (page_index, word_index)
+        self.sel_focus = None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(event.rect(), QColor("#3A3A3A"))
+        if not self.win.doc:
+            return
+        sel_lo, sel_hi = self.selection_range()
+        for i, geom in enumerate(self.win.page_geoms):
+            page_rect = QRect(int(geom["x"]), int(geom["y"]), int(geom["w"]), int(geom["h"]))
+            if not page_rect.intersects(event.rect()):
+                continue
+            pixmap = self.win.page_pixmap(i)
+            if pixmap is None:
+                continue
+            painter.drawPixmap(page_rect.topLeft(), pixmap)
+            if sel_lo is not None and sel_lo[0] <= i <= sel_hi[0]:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(self.SELECTION_COLOR))
+                for w_idx, word in enumerate(self.win.page_words(i)):
+                    if not self._word_selected(i, w_idx, sel_lo, sel_hi):
+                        continue
+                    s = geom["scale"]
+                    painter.drawRect(QRectF(
+                        geom["x"] + word[0] * s, geom["y"] + word[1] * s,
+                        (word[2] - word[0]) * s, (word[3] - word[1]) * s
+                    ))
+
+    @staticmethod
+    def _word_selected(page_idx, word_idx, lo, hi):
+        return lo <= (page_idx, word_idx) <= hi
+
+    def selection_range(self):
+        if self.sel_anchor is None or self.sel_focus is None:
+            return None, None
+        lo, hi = sorted([self.sel_anchor, self.sel_focus])
+        return lo, hi
+
+    def clear_selection(self):
+        self.sel_anchor = self.sel_focus = None
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        hit = self.win.word_at(event.pos())
+        self.sel_anchor = hit
+        self.sel_focus = hit
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.LeftButton) or self.sel_anchor is None:
+            return
+        hit = self.win.word_at(event.pos())
+        if hit is not None and hit != self.sel_focus:
+            self.sel_focus = hit
+            self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        hit = self.win.word_at(event.pos())
+        if hit is not None:
+            self.sel_anchor = self.sel_focus = hit
+            self.update()
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copy")
+        copy_action.setEnabled(bool(self.win.selected_text()))
+        select_all_action = menu.addAction("Select All Text")
+        chosen = menu.exec_(event.globalPos())
+        if chosen == copy_action:
+            self.win.copy_selection()
+        elif chosen == select_all_action:
+            self.win.select_all_text()
+
+
 class WorkInstructionWindow(QWidget):
-    """Pop-out window that shows a Work Instruction PDF one slide at a time."""
+    """Pop-out window that streams a Work Instruction PDF like Chrome's PDF viewer."""
+
+    PAGE_GAP = 14
+    MARGIN = 12
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.Window)
@@ -486,9 +577,10 @@ class WorkInstructionWindow(QWidget):
 
         self.doc = None
         self.pdf_path = ""
-        self.page_index = 0
         self.user_zoom = 1.0
-        self._rendered_width = 0
+        self.page_geoms = []
+        self._pixmap_cache = {}
+        self._words_cache = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -497,11 +589,10 @@ class WorkInstructionWindow(QWidget):
         self.scroll.setWidgetResizable(False)
         self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setFocusPolicy(Qt.NoFocus)  # keep key events on the window so arrows page slides
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)  # stable viewport width while laying out
         self.scroll.setStyleSheet("background-color: #3A3A3A; border: 1px solid #222222;")
-        self.page_label = QLabel("No Work Instruction loaded.")
-        self.page_label.setAlignment(Qt.AlignCenter)
-        self.page_label.setStyleSheet("color: #DDDDDD; font-size: 14px;")
-        self.scroll.setWidget(self.page_label)
+        self.canvas = PdfCanvas(self)
+        self.scroll.setWidget(self.canvas)
         layout.addWidget(self.scroll, 1)
 
         nav = QHBoxLayout()
@@ -514,6 +605,12 @@ class WorkInstructionWindow(QWidget):
         self.next_btn.clicked.connect(lambda: self.step_page(1))
         nav.addWidget(self.next_btn)
         nav.addStretch()
+        self.copy_btn = QPushButton("Copy Text")
+        self.copy_btn.setFocusPolicy(Qt.NoFocus)
+        self.copy_btn.setToolTip("Copy the selected text (Ctrl+C)")
+        self.copy_btn.clicked.connect(self.copy_selection)
+        nav.addWidget(self.copy_btn)
+        nav.addSpacing(12)
         self.zoom_out_btn = QPushButton("−")
         self.zoom_out_btn.setFocusPolicy(Qt.NoFocus)
         self.zoom_out_btn.setFixedWidth(32)
@@ -538,11 +635,14 @@ class WorkInstructionWindow(QWidget):
         layout.addLayout(nav)
 
         self.scroll.viewport().installEventFilter(self)
-        self.page_label.installEventFilter(self)
+        self.canvas.installEventFilter(self)
+        self.scroll.verticalScrollBar().valueChanged.connect(self.update_status)
 
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
-        self._resize_timer.timeout.connect(self.render_page)
+        self._resize_timer.timeout.connect(self.relayout)
+
+    # ---------- document ----------
 
     def load_pdf(self, path):
         if fitz is None:
@@ -552,23 +652,101 @@ class WorkInstructionWindow(QWidget):
             self.doc.close()
         self.doc = doc
         self.pdf_path = path
-        self.page_index = 0
-        self._rendered_width = 0
+        self.user_zoom = 1.0
+        self.page_geoms = []
+        self._pixmap_cache.clear()
+        self._words_cache.clear()
+        self.canvas.clear_selection()
         self.setWindowTitle(f"Work Instructions - {os.path.basename(path)}")
-        self.render_page()
+        self.relayout()
+        self.scroll.verticalScrollBar().setValue(0)
 
     def page_count(self):
         return len(self.doc) if self.doc else 0
 
+    def page_words(self, index):
+        """Words as (x0, y0, x1, y1, text, block, line, word) in PDF points, reading order."""
+        words = self._words_cache.get(index)
+        if words is None:
+            words = self.doc[index].get_text("words")
+            self._words_cache[index] = words
+        return words
+
+    def page_pixmap(self, index):
+        pixmap = self._pixmap_cache.get(index)
+        if pixmap is None:
+            geom = self.page_geoms[index]
+            page = self.doc[index]
+            pix = page.get_pixmap(matrix=fitz.Matrix(geom["scale"], geom["scale"]), alpha=False)
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(img.copy())
+            self._pixmap_cache[index] = pixmap
+            self._prune_pixmap_cache(index)
+        return pixmap
+
+    def _prune_pixmap_cache(self, around):
+        if len(self._pixmap_cache) <= 12:
+            return
+        for key in [k for k in self._pixmap_cache if abs(k - around) > 4]:
+            del self._pixmap_cache[key]
+
+    # ---------- layout ----------
+
+    def relayout(self):
+        self._pixmap_cache.clear()
+        if not self.doc or self.page_count() == 0:
+            self.canvas.resize(self.scroll.viewport().size())
+            self.page_geoms = []
+            self.update_status()
+            return
+        bar = self.scroll.verticalScrollBar()
+        old_geoms = self.page_geoms
+        anchor_page, anchor_ratio = 0, 0.0
+        if old_geoms:
+            anchor_page = self.current_page()
+            g = old_geoms[anchor_page]
+            anchor_ratio = (bar.value() - g["y"]) / g["h"] if g["h"] else 0.0
+        viewport_w = max(220, self.scroll.viewport().width())
+        target_w = max(120.0, (viewport_w - 2 * self.MARGIN) * self.user_zoom)
+        content_w = max(viewport_w, target_w + 2 * self.MARGIN)
+        geoms = []
+        y = float(self.MARGIN)
+        for i in range(self.page_count()):
+            rect = self.doc[i].rect
+            scale = target_w / rect.width if rect.width else 1.0
+            h = rect.height * scale
+            geoms.append({"x": (content_w - target_w) / 2.0, "y": y, "w": target_w, "h": h, "scale": scale})
+            y += h + self.PAGE_GAP
+        self.page_geoms = geoms
+        self.canvas.resize(int(content_w), int(y - self.PAGE_GAP + self.MARGIN))
+        if old_geoms:
+            g = geoms[min(anchor_page, len(geoms) - 1)]
+            bar.setValue(int(g["y"] + anchor_ratio * g["h"]))
+        self.canvas.update()
+        self.update_status()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.doc:
+            self._resize_timer.start(120)
+
+    # ---------- navigation ----------
+
+    def current_page(self):
+        if not self.page_geoms:
+            return 0
+        y = self.scroll.verticalScrollBar().value() + self.MARGIN + 2
+        for i, geom in enumerate(self.page_geoms):
+            if y < geom["y"] + geom["h"]:
+                return i
+        return len(self.page_geoms) - 1
+
     def goto_page(self, index):
-        if not self.doc:
+        if not self.page_geoms:
             return
         index = max(0, min(int(index), self.page_count() - 1))
-        if index == self.page_index and self._rendered_width:
-            return
-        self.page_index = index
-        self.render_page()
-        self.scroll.verticalScrollBar().setValue(0)
+        self.scroll.verticalScrollBar().setValue(int(self.page_geoms[index]["y"] - self.MARGIN))
+        self.update_status()
 
     def goto_slide(self, slide_value):
         """Slide numbers are 1-based and map directly onto PDF pages."""
@@ -578,55 +756,118 @@ class WorkInstructionWindow(QWidget):
         self.goto_page(int(digits) - 1)
 
     def step_page(self, delta):
-        self.goto_page(self.page_index + delta)
+        if not self.page_geoms:
+            return
+        cur = self.current_page()
+        if delta < 0:
+            top = int(self.page_geoms[cur]["y"] - self.MARGIN)
+            # Snap back to the top of the current slide first, like Chrome does.
+            self.goto_page(cur if self.scroll.verticalScrollBar().value() > top + 4 else cur - 1)
+        else:
+            self.goto_page(cur + 1)
+
+    def scroll_by(self, pixels):
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.value() + pixels)
+
+    def update_status(self):
+        if not self.doc:
+            self.status_label.setText("No Work Instruction loaded.")
+            return
+        zoom_txt = "" if abs(self.user_zoom - 1.0) < 1e-6 else f"  ({self.user_zoom * 100:.0f}%)"
+        self.status_label.setText(f"Slide {self.current_page() + 1} / {self.page_count()}{zoom_txt}")
+
+    # ---------- zoom ----------
 
     def adjust_zoom(self, factor):
         new_zoom = max(0.25, min(6.0, self.user_zoom * factor))
         if abs(new_zoom - self.user_zoom) < 1e-6:
             return
         self.user_zoom = new_zoom
-        self.render_page()
+        self.relayout()
 
     def reset_zoom(self):
+        if abs(self.user_zoom - 1.0) < 1e-6:
+            return
         self.user_zoom = 1.0
-        self.render_page()
+        self.relayout()
 
-    def render_page(self):
+    # ---------- text selection ----------
+
+    def word_at(self, pos):
+        """Maps a canvas point to (page_index, word_index), snapping to the nearest word."""
+        if not self.page_geoms:
+            return None
+        page_idx = None
+        for i, geom in enumerate(self.page_geoms):
+            if pos.y() < geom["y"] + geom["h"] + self.PAGE_GAP / 2:
+                page_idx = i
+                break
+        if page_idx is None:
+            page_idx = len(self.page_geoms) - 1
+        geom = self.page_geoms[page_idx]
+        scale = geom["scale"] or 1.0
+        x = (pos.x() - geom["x"]) / scale
+        y = (pos.y() - geom["y"]) / scale
+        words = self.page_words(page_idx)
+        if not words:
+            return None
+        best_idx, best_dist = 0, None
+        for idx, w in enumerate(words):
+            if w[0] <= x <= w[2] and w[1] <= y <= w[3]:
+                return (page_idx, idx)
+            dx = max(w[0] - x, 0, x - w[2])
+            dy = max(w[1] - y, 0, y - w[3])
+            dist = dx * dx + (dy * 4) ** 2  # weight vertical distance so lines win over columns
+            if best_dist is None or dist < best_dist:
+                best_idx, best_dist = idx, dist
+        return (page_idx, best_idx)
+
+    def select_all_text(self):
         if not self.doc or self.page_count() == 0:
             return
-        page = self.doc[self.page_index]
-        fit_w = max(200, self.scroll.viewport().width() - 4)
-        target_w = fit_w * self.user_zoom
-        zoom = target_w / page.rect.width if page.rect.width else 1.0
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(img.copy())
-        self.page_label.setPixmap(pixmap)
-        self.page_label.resize(pixmap.size())
-        self._rendered_width = fit_w
-        zoom_txt = "" if abs(self.user_zoom - 1.0) < 1e-6 else f"  ({self.user_zoom * 100:.0f}%)"
-        self.status_label.setText(f"Slide {self.page_index + 1} / {self.page_count()}{zoom_txt}")
+        last_page = self.page_count() - 1
+        last_words = self.page_words(last_page)
+        self.canvas.sel_anchor = (0, 0)
+        self.canvas.sel_focus = (last_page, max(0, len(last_words) - 1))
+        self.canvas.update()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.doc:
-            self._resize_timer.start(120)
+    def selected_text(self):
+        lo, hi = self.canvas.selection_range()
+        if lo is None:
+            return ""
+        chunks = []
+        prev_line = None
+        for page_idx in range(lo[0], hi[0] + 1):
+            words = self.page_words(page_idx)
+            start = lo[1] if page_idx == lo[0] else 0
+            end = hi[1] if page_idx == hi[0] else len(words) - 1
+            for idx in range(start, min(end, len(words) - 1) + 1):
+                w = words[idx]
+                line_key = (page_idx, w[5], w[6])
+                if prev_line is not None and line_key != prev_line:
+                    chunks.append("\n")
+                elif chunks:
+                    chunks.append(" ")
+                chunks.append(w[4])
+                prev_line = line_key
+        return "".join(chunks).strip()
+
+    def copy_selection(self):
+        text = self.selected_text()
+        if text:
+            QApplication.clipboard().setText(text)
+
+    # ---------- input ----------
 
     def eventFilter(self, obj, event):
-        if obj in (self.scroll.viewport(), self.page_label) and self.doc:
-            if event.type() == QEvent.Wheel:
+        if obj in (self.scroll.viewport(), self.canvas) and self.doc:
+            if event.type() == QEvent.Wheel and (event.modifiers() & Qt.ControlModifier):
                 delta = event.angleDelta().y()
-                if event.modifiers() & Qt.ControlModifier:
-                    if delta:
-                        self.adjust_zoom(1.15 if delta > 0 else 1 / 1.15)
-                    return True
-                bar = self.scroll.verticalScrollBar()
-                at_end = delta < 0 and bar.value() >= bar.maximum()
-                at_start = delta > 0 and bar.value() <= bar.minimum()
-                if at_end or at_start:
-                    self.step_page(1 if delta < 0 else -1)
-                    return True
-            elif event.type() == QEvent.KeyPress and self.handle_nav_key(event.key(), event.modifiers()):
+                if delta:
+                    self.adjust_zoom(1.15 if delta > 0 else 1 / 1.15)
+                return True
+            if event.type() == QEvent.KeyPress and self.handle_nav_key(event.key(), event.modifiers()):
                 return True
         return super().eventFilter(obj, event)
 
@@ -638,17 +879,31 @@ class WorkInstructionWindow(QWidget):
                 self.adjust_zoom(1 / 1.15)
             elif key == Qt.Key_0:
                 self.reset_zoom()
+            elif key == Qt.Key_C:
+                self.copy_selection()
+            elif key == Qt.Key_A:
+                self.select_all_text()
             else:
                 return False
             return True
-        if key in (Qt.Key_Left, Qt.Key_PageUp, Qt.Key_Backspace):
+        if key in (Qt.Key_Left, Qt.Key_Backspace):
             self.step_page(-1)
-        elif key in (Qt.Key_Right, Qt.Key_PageDown, Qt.Key_Space):
+        elif key in (Qt.Key_Right, Qt.Key_Space):
             self.step_page(1)
+        elif key == Qt.Key_Up:
+            self.scroll_by(-60)
+        elif key == Qt.Key_Down:
+            self.scroll_by(60)
+        elif key == Qt.Key_PageUp:
+            self.scroll_by(-self.scroll.viewport().height())
+        elif key == Qt.Key_PageDown:
+            self.scroll_by(self.scroll.viewport().height())
         elif key == Qt.Key_Home:
             self.goto_page(0)
         elif key == Qt.Key_End:
             self.goto_page(self.page_count() - 1)
+        elif key == Qt.Key_Escape:
+            self.canvas.clear_selection()
         else:
             return False
         return True
@@ -658,6 +913,9 @@ class WorkInstructionWindow(QWidget):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        self._pixmap_cache.clear()
+        self._words_cache.clear()
+        self.page_geoms = []
         if self.doc:
             self.doc.close()
             self.doc = None
