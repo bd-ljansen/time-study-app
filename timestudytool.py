@@ -968,20 +968,22 @@ class SettingsDialog(QDialog):
         self.setMinimumSize(760, 480)
         self.resize(860, 540)
         self.setStyleSheet("""
-            QDialog { background-color: #202328; color: #E6E8EB; }
-            QListWidget { background-color: #17191D; border: none; color: #C7CBD1; font-size: 14px; padding-top: 10px; }
+            QDialog { background-color: #FFFFFF; color: #1E293B; }
+            QListWidget { background-color: #F1F5F9; border: none; color: #475569; font-size: 14px; padding-top: 10px; }
             QListWidget::item { padding: 11px 16px; border-left: 3px solid transparent; }
-            QListWidget::item:selected { background-color: #2B3038; color: #FFFFFF; border-left: 3px solid #2D8CEB; }
-            QLabel#settingsTitle { color: #FFFFFF; font-size: 22px; font-weight: bold; }
-            QLabel#settingsSection { color: #AEB4BD; font-size: 12px; font-weight: bold; }
-            QLabel#settingsName { color: #F2F3F5; font-size: 14px; font-weight: bold; }
-            QLabel#settingsDescription { color: #9DA3AC; font-size: 12px; }
+            QListWidget::item:selected { background-color: #DBEAFE; color: #1E3A8A; border-left: 3px solid #2563EB; }
+            QLabel#settingsTitle { color: #0F172A; font-size: 22px; font-weight: bold; }
+            QLabel#settingsSection { color: #64748B; font-size: 12px; font-weight: bold; }
+            QLabel#settingsName { color: #1E293B; font-size: 14px; font-weight: bold; }
+            QLabel#settingsDescription { color: #64748B; font-size: 12px; }
             QCheckBox { spacing: 8px; }
             QCheckBox::indicator { width: 38px; height: 20px; }
-            QCheckBox::indicator:unchecked { background-color: #464B53; border: 1px solid #656B74; border-radius: 10px; }
-            QCheckBox::indicator:checked { background-color: #2D8CEB; border: 1px solid #58A8F5; border-radius: 10px; }
-            QPushButton { background-color: #30343B; color: #E6E8EB; border: 1px solid #484D55; padding: 7px 18px; border-radius: 3px; }
-            QPushButton:hover { background-color: #3A3F47; }
+            QCheckBox::indicator:unchecked { background-color: #E2E8F0; border: 1px solid #94A3B8; border-radius: 10px; }
+            QCheckBox::indicator:checked { background-color: #2563EB; border: 1px solid #1D4ED8; border-radius: 10px; }
+            QLineEdit { background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; padding: 6px 8px; border-radius: 3px; }
+            QLineEdit:focus { border-color: #2563EB; }
+            QPushButton { background-color: #F8FAFC; color: #1E293B; border: 1px solid #CBD5E1; padding: 7px 18px; border-radius: 3px; }
+            QPushButton:hover { background-color: #E2E8F0; }
         """)
 
         layout = QHBoxLayout(self)
