@@ -1241,6 +1241,7 @@ class TimeStudyApp(QMainWindow):
 
         self.init_ui()
         self.create_menu_bar()
+        self.apply_theme()
         QApplication.instance().installEventFilter(self)
         
         # Add to the end of def __init__(self):
@@ -1908,6 +1909,9 @@ class TimeStudyApp(QMainWindow):
         self.auto_open_wi_on_startup = enabled
         self.settings.setValue("wi/auto_open_on_startup", enabled)
         self.settings.sync()
+
+    def apply_theme(self):
+        self.setStyleSheet("")
 
     def _recent_project_paths(self):
         recent = self.settings.value("projects/recent", [], type=list)
