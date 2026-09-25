@@ -25,9 +25,10 @@ from PyQt5.QtWidgets import (
     QGraphicsPixmapItem, QLineEdit, QTextEdit, QMessageBox, QAction,
     QAbstractItemView, QStyle, QToolBar, QStyledItemDelegate, QInputDialog, 
     QMenu, QProgressDialog, QStackedWidget, QSplitter, QListWidget, QListWidgetItem,
-    QGroupBox, QSizePolicy, QButtonGroup, QScrollArea
+    QGroupBox, QSizePolicy, QButtonGroup, QScrollArea, QDialog, QCheckBox,
+    QToolButton
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF
+from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF, QSettings
 from PyQt5.QtGui import (
     QImage, QPixmap, QColor, QBrush, QFont, QPainter, QPen, QPolygonF,
     QFontMetrics
@@ -936,11 +937,106 @@ class WorkInstructionWindow(QWidget):
         super().closeEvent(event)
 
 
+class SettingsDialog(QDialog):
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.setWindowTitle("Settings")
+        self.setMinimumSize(760, 480)
+        self.resize(860, 540)
+        self.setStyleSheet("""
+            QDialog { background-color: #202328; color: #E6E8EB; }
+            QListWidget { background-color: #17191D; border: none; color: #C7CBD1; font-size: 14px; padding-top: 10px; }
+            QListWidget::item { padding: 11px 16px; border-left: 3px solid transparent; }
+            QListWidget::item:selected { background-color: #2B3038; color: #FFFFFF; border-left: 3px solid #2D8CEB; }
+            QLabel#settingsTitle { color: #FFFFFF; font-size: 22px; font-weight: bold; }
+            QLabel#settingsSection { color: #AEB4BD; font-size: 12px; font-weight: bold; }
+            QLabel#settingsName { color: #F2F3F5; font-size: 14px; font-weight: bold; }
+            QLabel#settingsDescription { color: #9DA3AC; font-size: 12px; }
+            QCheckBox { spacing: 8px; }
+            QCheckBox::indicator { width: 38px; height: 20px; }
+            QCheckBox::indicator:unchecked { background-color: #464B53; border: 1px solid #656B74; border-radius: 10px; }
+            QCheckBox::indicator:checked { background-color: #2D8CEB; border: 1px solid #58A8F5; border-radius: 10px; }
+            QPushButton { background-color: #30343B; color: #E6E8EB; border: 1px solid #484D55; padding: 7px 18px; border-radius: 3px; }
+            QPushButton:hover { background-color: #3A3F47; }
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        categories = QListWidget()
+        categories.setFixedWidth(215)
+        categories.addItem("WI pop-out")
+        categories.setCurrentRow(0)
+        layout.addWidget(categories)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(32, 26, 32, 24)
+        content_layout.setSpacing(18)
+
+        title = QLabel("WI pop-out")
+        title.setObjectName("settingsTitle")
+        content_layout.addWidget(title)
+
+        section = QLabel("BEHAVIOR")
+        section.setObjectName("settingsSection")
+        content_layout.addWidget(section)
+
+        self.auto_jump_checkbox = self._add_setting(
+            content_layout,
+            "Auto-jump to slide",
+            "Jump the WI PDF viewer to the slide number of the selected row.",
+            app.auto_jump_to_slide,
+            app.set_auto_jump_to_slide,
+        )
+        self.auto_open_checkbox = self._add_setting(
+            content_layout,
+            "Auto-open WI on startup",
+            "Open the saved WI pop-out automatically when a project is loaded.",
+            app.auto_open_wi_on_startup,
+            app.set_auto_open_wi_on_startup,
+        )
+
+        content_layout.addStretch()
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+        content_layout.addLayout(button_layout)
+        layout.addWidget(content, 1)
+
+    def _add_setting(self, layout, name, description, checked, callback):
+        row = QHBoxLayout()
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(3)
+        name_label = QLabel(name)
+        name_label.setObjectName("settingsName")
+        description_label = QLabel(description)
+        description_label.setObjectName("settingsDescription")
+        description_label.setWordWrap(True)
+        text_layout.addWidget(name_label)
+        text_layout.addWidget(description_label)
+        row.addLayout(text_layout, 1)
+        checkbox = QCheckBox()
+        checkbox.setChecked(checked)
+        checkbox.toggled.connect(callback)
+        row.addWidget(checkbox, 0, Qt.AlignVCenter)
+        layout.addLayout(row)
+        return checkbox
+
+
 class TimeStudyApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Multi-Video Time Study Logger - [Untitled Project]")
         self.setGeometry(100, 100, 1420, 800)
+
+        self.settings = QSettings("TimeStudyTool", "TimeStudyTool")
+        self.auto_jump_to_slide = self.settings.value("wi/auto_jump_to_slide", True, type=bool)
+        self.auto_open_wi_on_startup = self.settings.value("wi/auto_open_on_startup", True, type=bool)
 
         self.unsaved_changes = False
         self.view_mode = "video"
@@ -1498,6 +1594,17 @@ class TimeStudyApp(QMainWindow):
         self.redo_action.triggered.connect(self.redo)
         edit_menu.addAction(self.redo_action)
 
+        self.settings_button = QToolButton(self)
+        self.settings_button.setText("⚙")
+        self.settings_button.setToolTip("Settings")
+        self.settings_button.setFixedSize(32, 28)
+        self.settings_button.setStyleSheet("""
+            QToolButton { border: none; border-radius: 4px; color: #334155; font-size: 20px; }
+            QToolButton:hover { background-color: #E2E8F0; color: #0F172A; }
+        """)
+        self.settings_button.clicked.connect(self.open_settings)
+        menu_bar.setCornerWidget(self.settings_button, Qt.TopRightCorner)
+
         toolbar = QToolBar("Main Toolbar", self)
         toolbar.setMovable(False)
         toolbar.setStyleSheet("""
@@ -1509,6 +1616,19 @@ class TimeStudyApp(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, toolbar)
         toolbar.addAction(self.undo_action)
         toolbar.addAction(self.redo_action)
+
+    def open_settings(self):
+        SettingsDialog(self).exec_()
+
+    def set_auto_jump_to_slide(self, enabled):
+        self.auto_jump_to_slide = enabled
+        self.settings.setValue("wi/auto_jump_to_slide", enabled)
+        self.settings.sync()
+
+    def set_auto_open_wi_on_startup(self, enabled):
+        self.auto_open_wi_on_startup = enabled
+        self.settings.setValue("wi/auto_open_on_startup", enabled)
+        self.settings.sync()
 
     def init_ui(self):
         main_widget = QWidget()
@@ -3304,7 +3424,7 @@ class TimeStudyApp(QMainWindow):
             self.wi_window = None
 
     def jump_wi_to_slide(self, slide_value):
-        if self.wi_window is not None and self.wi_window.doc:
+        if self.auto_jump_to_slide and self.wi_window is not None and self.wi_window.doc:
             self.wi_window.goto_slide(slide_value)
 
     def save_project(self):
@@ -3433,7 +3553,10 @@ class TimeStudyApp(QMainWindow):
         self.close_work_instruction()
         wi_stored = data.get("work_instruction_path", "")
         if wi_stored:
-            self.load_work_instruction(self._resolve_project_path(wi_stored, path), show=True)
+            resolved_wi_path = self._resolve_project_path(wi_stored, path)
+            self.wi_path = resolved_wi_path
+            if self.auto_open_wi_on_startup:
+                self.load_work_instruction(resolved_wi_path, show=True)
 
         filename = os.path.basename(path)
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
