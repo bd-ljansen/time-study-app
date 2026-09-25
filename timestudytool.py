@@ -1929,7 +1929,9 @@ class TimeStudyApp(QMainWindow):
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.NoFocus)
-        btn.setMinimumHeight(38 if not is_primary else 124)
+        row_height = 38
+        row_spacing = 6
+        btn.setFixedHeight((row_height * 3) + (row_spacing * 2) if is_primary else row_height)
         if icon is not None:
             btn.setIcon(icon)
         if variant == "open":
@@ -2008,6 +2010,7 @@ class TimeStudyApp(QMainWindow):
 
         left_col = QVBoxLayout()
         left_col.setSpacing(6)
+        left_col.setAlignment(Qt.AlignTop)
         open_icon = self.style().standardIcon(QStyle.SP_DirOpenIcon)
         new_icon = self.style().standardIcon(QStyle.SP_FileIcon)
         open_btn = self._create_home_button("Open Project", self.open_project_dialog, is_primary=True, variant="open", icon=open_icon)
@@ -2025,12 +2028,18 @@ class TimeStudyApp(QMainWindow):
         recent_title.setObjectName("recentTitle")
         recent_title.setAlignment(Qt.AlignCenter)
         right_col.addWidget(recent_title)
+        self.home_recent_grid = QWidget()
+        self.home_recent_grid.setStyleSheet("border: none;")
+        recent_grid_layout = QVBoxLayout(self.home_recent_grid)
+        recent_grid_layout.setContentsMargins(0, 0, 0, 0)
+        recent_grid_layout.setSpacing(6)
         self.home_recent_buttons = []
         for _ in range(4):
             recent_btn = self._create_home_button("", lambda: None)
             recent_btn.setMinimumWidth(178)
             self.home_recent_buttons.append(recent_btn)
-            right_col.addWidget(recent_btn)
+            recent_grid_layout.addWidget(recent_btn)
+        right_col.addWidget(self.home_recent_grid)
         menu_row.addWidget(self.home_recent_widget)
 
         content_layout.addLayout(menu_row)
@@ -2055,10 +2064,10 @@ class TimeStudyApp(QMainWindow):
                 btn.clicked.disconnect()
                 btn.clicked.connect(lambda _, p=path: self.open_recent_project(p))
             else:
-                btn.setText("")
+                btn.setText("Recent Project")
                 btn.setToolTip("")
                 btn.setEnabled(False)
-                btn.setVisible(False)
+                btn.setVisible(True)
 
     def show_editor_screen(self):
         if hasattr(self, "app_stack"):
