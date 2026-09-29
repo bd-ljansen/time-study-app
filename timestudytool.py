@@ -4199,6 +4199,8 @@ class TimeStudyApp(QMainWindow):
             return
         window = getattr(self, window_attr)
         if window is not None and window.doc:
+            if window.isMinimized():
+                window.setWindowState((window.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
             window.show()
             window.raise_()
             window.activateWindow()
