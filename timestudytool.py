@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF, QSettings
 from PyQt5.QtGui import (
     QImage, QPixmap, QColor, QBrush, QFont, QPainter, QPen, QPolygonF,
-    QFontMetrics, QIcon
+    QFontMetrics, QFontMetricsF, QPainterPath, QIcon
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -450,17 +450,21 @@ class ParetoChartWidget(QWidget):
             painter.drawEllipse(p, 3.2, 3.2)
 
         # Rotated category labels
-        painter.setFont(tick_font)
-        painter.setPen(QColor(self.TEXT_COLOR))
+        label_metrics = QFontMetricsF(tick_font)
+        label_baseline = (label_metrics.ascent() - label_metrics.descent()) / 2
         for i, text in enumerate(labels):
+            label_path = QPainterPath()
+            label_path.addText(
+                QPointF(-6 - label_metrics.horizontalAdvance(text), label_baseline),
+                tick_font, text)
             painter.save()
             painter.translate(left + slot * (i + 0.5), bottom + 8)
             painter.rotate(-45)
-            painter.drawText(QRectF(-label_band - 10, -9, label_band + 4, 18),
-                             Qt.AlignRight | Qt.AlignVCenter, text)
+            painter.fillPath(label_path, QColor(self.TEXT_COLOR))
             painter.restore()
 
         # Axis titles
+        painter.setPen(QColor(self.TEXT_COLOR))
         painter.setFont(axis_title_font)
         painter.drawText(QRectF(left, h - 30, plot.width(), 22), Qt.AlignCenter, self.x_title)
         painter.save()
