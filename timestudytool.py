@@ -367,7 +367,7 @@ class ParetoChartWidget(QWidget):
             painter.setPen(QColor("#94A3B8"))
             painter.setFont(QFont("Segoe UI", 12))
             painter.drawText(self.rect(), Qt.AlignCenter,
-                             "No category data to chart.\nLoad or open a project first.")
+                             f"No {self.x_title.lower()} data to chart.\nLoad or open a project first.")
             return
 
         w, h = self.width(), self.height()
@@ -1264,6 +1264,7 @@ class TimeStudyApp(QMainWindow):
         self.last_category_selection = None
         # Mirrors the source spreadsheet's Pareto query, which drops Break and Other.
         self.pareto_excluded_cats = {"Break", "Other"}
+        self.pareto_excluded_slides = set()
 
         self.cap = None
         self.active_video_path = ""
@@ -2303,7 +2304,7 @@ class TimeStudyApp(QMainWindow):
         self.view_mode_group = QButtonGroup(self)
         self.view_mode_group.setExclusive(True)
         self.view_mode_buttons = []
-        for i, label in enumerate(["🕒 Chronological Mode", "📁 Category Mode", "📊 Pareto Mode"]):
+        for i, label in enumerate(["🕒 Chronological", "📁 Category", "📊 Pareto (Category)", "📊 Pareto (Slide)"]):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setFocusPolicy(Qt.NoFocus)
@@ -2449,6 +2450,43 @@ class TimeStudyApp(QMainWindow):
         pareto_layout.addWidget(exclude_box, 1)
         self.stacked_widget.addWidget(self.pareto_page)
 
+        slide_page = QWidget()
+        slide_layout = QHBoxLayout(slide_page)
+        slide_layout.setContentsMargins(0, 0, 0, 0)
+        self.slide_pareto_chart = ParetoChartWidget()
+        self.slide_pareto_chart.title = "Time Delay by Slide"
+        self.slide_pareto_chart.x_title = "Slide Number"
+        self.slide_pareto_chart.setStyleSheet("border: 1px solid #CCCCCC;")
+        slide_layout.addWidget(self.slide_pareto_chart, 4)
+
+        slide_box = QGroupBox("Slides in Pareto")
+        slide_box.setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; margin-top: 6px; }")
+        slide_box_layout = QVBoxLayout(slide_box)
+        slide_hint = QLabel("Uncheck a slide to remove it from the Pareto.")
+        slide_hint.setWordWrap(True)
+        slide_hint.setStyleSheet("color: #64748B; font-weight: normal; font-size: 12px;")
+        slide_box_layout.addWidget(slide_hint)
+        self.slide_pareto_exclude_list = QListWidget()
+        self.slide_pareto_exclude_list.setStyleSheet(
+            "QListWidget { background-color: #F4F5F7; border: 1px solid #CBD5E1; font-size: 13px; }"
+            "QListWidget::item { padding: 3px 4px; }"
+        )
+        self.slide_pareto_exclude_list.itemChanged.connect(self.on_slide_pareto_exclusion_changed)
+        slide_box_layout.addWidget(self.slide_pareto_exclude_list)
+        slide_buttons = QHBoxLayout()
+        slide_select_all = QPushButton("Select All")
+        slide_select_all.setFocusPolicy(Qt.NoFocus)
+        slide_select_all.clicked.connect(lambda: self.set_all_pareto_slides(True))
+        slide_buttons.addWidget(slide_select_all)
+        slide_clear_all = QPushButton("Clear All")
+        slide_clear_all.setFocusPolicy(Qt.NoFocus)
+        slide_clear_all.clicked.connect(lambda: self.set_all_pareto_slides(False))
+        slide_buttons.addWidget(slide_clear_all)
+        slide_box_layout.addLayout(slide_buttons)
+        slide_box.setMaximumWidth(280)
+        slide_layout.addWidget(slide_box, 1)
+        self.stacked_widget.addWidget(slide_page)
+
         right_layout.addWidget(self.stacked_widget)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -2514,16 +2552,16 @@ class TimeStudyApp(QMainWindow):
         self.category_tree.scrollToItem(best)
 
     def toggle_view_mode(self, index):
-        target_mode = ("video", "category", "pareto")[index]
+        target_mode = ("video", "category", "pareto", "pareto_slide")[index]
         if self.view_mode == target_mode:
             self.view_mode_buttons[index].setChecked(True)
             return
         self._capture_mode_selection()
         self.view_mode_buttons[index].setChecked(True)
-        if index == 2:
+        if index in (2, 3):
             if self.view_mode == "video":
                 self.saved_video_state = self.get_current_state()
-            self.view_mode = "pareto"
+            self.view_mode = target_mode
             self.timer.stop()
             self.is_playing = False
             self.active_category_item = None
@@ -2539,8 +2577,11 @@ class TimeStudyApp(QMainWindow):
             self.collapse_btn.setVisible(False)
             self.expand_btn.setVisible(False)
 
-            self.build_pareto_view()
-            self.stacked_widget.setCurrentIndex(2)
+            if index == 2:
+                self.build_pareto_view()
+            else:
+                self.build_slide_pareto_view()
+            self.stacked_widget.setCurrentIndex(index)
             self.update_undo_redo_actions()
         elif index == 1:
             if self.view_mode == "video":
@@ -2645,6 +2686,58 @@ class TimeStudyApp(QMainWindow):
                 self.pareto_excluded_cats.add(cat_name)
         self.pareto_exclude_list.blockSignals(False)
         self.refresh_pareto_chart()
+
+    def get_pareto_slide_totals(self):
+        totals = {}
+        for segment in self.get_category_segments(self.saved_video_state):
+            slide = clean_slide_str(segment["slide"])
+            if slide:
+                totals[slide] = totals.get(slide, 0) + segment["delta_ms"]
+        return sorted(totals.items(), key=lambda entry: entry[1], reverse=True)
+
+    def build_slide_pareto_view(self):
+        self.slide_pareto_exclude_list.blockSignals(True)
+        self.slide_pareto_exclude_list.clear()
+        for slide, total_ms in self.get_pareto_slide_totals():
+            item = QListWidgetItem(f"{slide}  ({self.format_ms(total_ms)})")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setData(Qt.UserRole, slide)
+            item.setCheckState(Qt.Unchecked if slide in self.pareto_excluded_slides else Qt.Checked)
+            self.slide_pareto_exclude_list.addItem(item)
+        self.slide_pareto_exclude_list.blockSignals(False)
+        self.refresh_slide_pareto_chart()
+
+    def refresh_slide_pareto_chart(self):
+        included = [(slide, ms) for slide, ms in self.get_pareto_slide_totals()
+                    if slide not in self.pareto_excluded_slides and ms > 0]
+        grand_total = sum(ms for _, ms in included)
+        running = 0
+        chart_data = []
+        for slide, ms in included:
+            running += ms
+            chart_data.append((slide, ms / 1000.0, running / grand_total))
+        self.slide_pareto_chart.set_data(chart_data)
+
+    def on_slide_pareto_exclusion_changed(self, item):
+        slide = item.data(Qt.UserRole)
+        if item.checkState() == Qt.Checked:
+            self.pareto_excluded_slides.discard(slide)
+        else:
+            self.pareto_excluded_slides.add(slide)
+        self.refresh_slide_pareto_chart()
+
+    def set_all_pareto_slides(self, checked):
+        self.slide_pareto_exclude_list.blockSignals(True)
+        for index in range(self.slide_pareto_exclude_list.count()):
+            item = self.slide_pareto_exclude_list.item(index)
+            item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            slide = item.data(Qt.UserRole)
+            if checked:
+                self.pareto_excluded_slides.discard(slide)
+            else:
+                self.pareto_excluded_slides.add(slide)
+        self.slide_pareto_exclude_list.blockSignals(False)
+        self.refresh_slide_pareto_chart()
 
     def build_category_view(self):
         self.category_tree.setUpdatesEnabled(False)
@@ -3509,7 +3602,7 @@ class TimeStudyApp(QMainWindow):
             self.highlight_active_row(0)
 
     def highlight_active_row(self, pos_ms):
-        if self.view_mode == "pareto":
+        if self.view_mode in ("pareto", "pareto_slide"):
             return
         if self.view_mode == "category":
             for g in range(self.category_tree.topLevelItemCount()):
