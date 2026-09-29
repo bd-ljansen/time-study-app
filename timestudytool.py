@@ -396,8 +396,15 @@ class ParetoChartWidget(QWidget):
         longest = max((fm_tick.width(t) for t in labels), default=0)
         label_band = min(longest + 12, int(h * self.MAX_LABEL_BAND_FRACTION))
 
-        left = 78
         right = w - 82
+        # Grow the left padding so no rotated (-45°) label extends past the widget's left edge.
+        left = 78
+        n_labels = len(labels)
+        cos45 = 0.7071
+        for i, text in enumerate(labels):
+            reach = (6 + fm_tick.width(text) + line_h / 2) * cos45
+            f = (i + 0.5) / n_labels
+            left = max(left, (6 + reach - right * f) / (1 - f))
         top = 46
         bottom = h - int(0.72 * label_band + line_h + 40)
         if right - left < 60 or bottom - top < 60:
