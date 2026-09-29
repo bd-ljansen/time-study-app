@@ -379,7 +379,9 @@ class ParetoChartWidget(QWidget):
                              f"No {self.x_title.lower()} data to chart.\nLoad or open a project first.")
             return
 
-        w, h = self.width(), self.height()
+        padding = 20
+        painter.translate(padding, padding)
+        w, h = self.width() - 2 * padding, self.height() - 2 * padding
         title_font = QFont("Segoe UI", 13)
         axis_title_font = QFont("Segoe UI", 10, QFont.Bold)
         tick_font = QFont("Segoe UI", 9)
