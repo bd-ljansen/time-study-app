@@ -3,6 +3,7 @@ import csv
 import json
 import os
 import random
+import re
 import cv2
 import openpyxl
 
@@ -94,6 +95,14 @@ def clean_slide_str(val):
         except ValueError:
             pass
     return s
+
+
+def parse_slide_ref(val):
+    """Split a slide value like '5' or '5 (2)' into (wi_index, slide_number or None)."""
+    s = clean_slide_str(val)
+    wi_index = 2 if re.search(r"\(\s*2\s*\)\s*$", s) else 1
+    match = re.search(r"\d+", s)
+    return wi_index, int(match.group()) if match else None
 
 
 class CategoryDelegate(QStyledItemDelegate):
@@ -605,9 +614,11 @@ class WorkInstructionWindow(QWidget):
     PAGE_GAP = 14
     MARGIN = 12
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, wi_index=1):
         super().__init__(parent, Qt.Window)
-        self.setWindowTitle("Work Instructions")
+        self.wi_index = wi_index
+        self.title_prefix = "Work Instructions" if wi_index == 1 else f"Work Instructions {wi_index}"
+        self.setWindowTitle(self.title_prefix)
         self.resize(960, 760)
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -716,7 +727,7 @@ class WorkInstructionWindow(QWidget):
         self._pixmap_cache.clear()
         self._words_cache.clear()
         self.canvas.clear_selection()
-        self.setWindowTitle(f"Work Instructions - {os.path.basename(path)}")
+        self.setWindowTitle(f"{self.title_prefix} - {os.path.basename(path)}")
         self.relayout()
         self.scroll.verticalScrollBar().setValue(0)
 
@@ -809,10 +820,10 @@ class WorkInstructionWindow(QWidget):
 
     def goto_slide(self, slide_value):
         """Slide numbers are 1-based and map directly onto PDF pages."""
-        digits = "".join(ch for ch in str(slide_value) if ch.isdigit())
-        if not digits:
+        _, number = parse_slide_ref(slide_value)
+        if number is None:
             return
-        self.goto_page(int(digits) - 1)
+        self.goto_page(number - 1)
 
     def step_page(self, delta):
         if not self.page_geoms:
@@ -1014,7 +1025,8 @@ class WorkInstructionWindow(QWidget):
     def link_slide_to_row(self):
         owner = self.parent()
         if self.doc and hasattr(owner, "link_slide_to_selected_row"):
-            owner.link_slide_to_selected_row(self.current_page() + 1)
+            slide = self.current_page() + 1
+            owner.link_slide_to_selected_row(slide if self.wi_index == 1 else f"{slide} ({self.wi_index})")
 
     def closeEvent(self, event):
         self._pixmap_cache.clear()
@@ -1273,6 +1285,8 @@ class TimeStudyApp(QMainWindow):
         self.project_path = ""
         self.wi_path = ""
         self.wi_window = None
+        self.wi2_path = ""
+        self.wi2_window = None
         self.is_playing = False
         self.fps = 30.0
         self.total_frames = 0
@@ -1828,7 +1842,7 @@ class TimeStudyApp(QMainWindow):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress:
             # The WI pop-out owns its own arrow-key navigation while it is focused.
-            if self.wi_window is not None and self._event_belongs_to_wi(obj):
+            if self._event_belongs_to_wi(obj):
                 return super().eventFilter(obj, event)
             focused = QApplication.focusWidget()
             key = event.key()
@@ -1909,8 +1923,12 @@ class TimeStudyApp(QMainWindow):
         import_excel_action.triggered.connect(self.import_from_excel)
         file_menu.addAction(import_excel_action)
         open_wi_action = QAction("Open WI (PDF)...", self)
-        open_wi_action.triggered.connect(self.open_work_instruction)
+        open_wi_action.triggered.connect(lambda: self.open_work_instruction(1))
         file_menu.addAction(open_wi_action)
+        self.open_wi2_action = QAction("Open WI 2 (PDF)...", self)
+        self.open_wi2_action.setVisible(False)
+        self.open_wi2_action.triggered.connect(lambda: self.open_work_instruction(2))
+        file_menu.addAction(self.open_wi2_action)
         file_menu.addSeparator()
         save_action = QAction("Save Project", self)
         save_action.setShortcut("Ctrl+S")
@@ -1936,7 +1954,10 @@ class TimeStudyApp(QMainWindow):
         edit_menu.addAction(self.redo_action)
         self.view_wi_action = QAction("View WI", self)
         self.view_wi_action.setEnabled(False)
-        self.view_wi_action.triggered.connect(self.view_work_instruction)
+        self.view_wi_action.triggered.connect(lambda: self.view_work_instruction(1))
+        self.view_wi2_action = QAction("View WI 2", self)
+        self.view_wi2_action.setVisible(False)
+        self.view_wi2_action.triggered.connect(lambda: self.view_work_instruction(2))
 
         self.settings_button = QToolButton(self)
         self.settings_button.setText("⚙")
@@ -1974,6 +1995,7 @@ class TimeStudyApp(QMainWindow):
         toolbar.addAction(self.undo_action)
         toolbar.addAction(self.redo_action)
         toolbar.addAction(self.view_wi_action)
+        toolbar.addAction(self.view_wi2_action)
         if hasattr(self, "app_stack") and self.app_stack.currentWidget() is self.home_page:
             toolbar.hide()
 
@@ -2795,7 +2817,10 @@ class TimeStudyApp(QMainWindow):
                 segments.append(segment)
                 
         if grouping == "slide":
-            sorted_cats = sorted(cat_segments.items(), key=lambda entry: (entry[0] == "Unassigned", int(entry[0]) if entry[0].isdigit() else float("inf"), entry[0]))
+            def slide_sort_key(entry):
+                wi_index, number = parse_slide_ref(entry[0])
+                return (entry[0] == "Unassigned", wi_index, number if number is not None else float("inf"), entry[0])
+            sorted_cats = sorted(cat_segments.items(), key=slide_sort_key)
         else:
             sorted_cats = sorted(cat_segments.items(), key=lambda entry: entry[1]["total_time"], reverse=True)
         bold_font = QFont()
@@ -4092,30 +4117,38 @@ class TimeStudyApp(QMainWindow):
         self.show_editor_screen()
 
     def _event_belongs_to_wi(self, obj):
-        if self.wi_window is None:
-            return False
-        if QApplication.activeWindow() is self.wi_window:
-            return True
-        if not isinstance(obj, QWidget):
-            return False
-        return obj is self.wi_window or self.wi_window.isAncestorOf(obj)
+        for window in (self.wi_window, self.wi2_window):
+            if window is None:
+                continue
+            if QApplication.activeWindow() is window:
+                return True
+            if isinstance(obj, QWidget) and (obj is window or window.isAncestorOf(obj)):
+                return True
+        return False
 
-    def open_work_instruction(self):
-        if self.wi_path:
+    def _wi_attrs(self, index):
+        return ("wi_path", "wi_window") if index == 1 else ("wi2_path", "wi2_window")
+
+    def open_work_instruction(self, index=1):
+        path_attr, _ = self._wi_attrs(index)
+        current_path = getattr(self, path_attr)
+        label = "Work Instruction" if index == 1 else f"Work Instruction {index}"
+        if current_path:
             reply = QMessageBox.warning(
-                self, "Replace Work Instruction",
-                f"This project is already linked to a Work Instruction:\n{os.path.basename(self.wi_path)}\n\n"
+                self, f"Replace {label}",
+                f"This project is already linked to a {label}:\n{os.path.basename(current_path)}\n\n"
                 "Opening a new one will unlink it. Continue?",
                 QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel
             )
             if reply != QMessageBox.Yes:
                 return
-        path, _ = QFileDialog.getOpenFileName(self, "Open Work Instruction PDF", self._default_browse_dir(), "PDF Files (*.pdf)")
+        path, _ = QFileDialog.getOpenFileName(self, f"Open {label} PDF", self._default_browse_dir(), "PDF Files (*.pdf)")
         if not path: return
-        if self.load_work_instruction(path):
+        if self.load_work_instruction(path, index=index):
             self.unsaved_changes = True
 
-    def load_work_instruction(self, path, show=True, warn_missing=True):
+    def load_work_instruction(self, path, show=True, warn_missing=True, index=1):
+        path_attr, window_attr = self._wi_attrs(index)
         if fitz is None:
             QMessageBox.warning(self, "Work Instructions", "PyMuPDF is not installed.\nRun: pip install PyMuPDF")
             return False
@@ -4123,48 +4156,63 @@ class TimeStudyApp(QMainWindow):
             if warn_missing:
                 QMessageBox.warning(self, "Work Instructions", f"Work Instruction PDF not found:\n{path}")
             return False
-        if self.wi_window is None:
-            self.wi_window = WorkInstructionWindow(self)
+        window = getattr(self, window_attr)
+        if window is None:
+            window = WorkInstructionWindow(self, wi_index=index)
+            setattr(self, window_attr, window)
         try:
-            self.wi_window.load_pdf(path)
+            window.load_pdf(path)
         except Exception as e:
             QMessageBox.critical(self, "Work Instructions", f"Failed to open PDF:\n{str(e)}")
             return False
-        self.wi_path = path
+        setattr(self, path_attr, path)
         if show:
-            self.wi_window.show()
-            self.wi_window.raise_()
-            self.wi_window.activateWindow()
-            self.wi_window.focus_viewer()
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            window.focus_viewer()
         self.update_work_instruction_action()
         return True
 
     def close_work_instruction(self):
-        self.wi_path = ""
-        if self.wi_window is not None:
-            self.wi_window.close()
-            self.wi_window = None
+        for index in (1, 2):
+            path_attr, window_attr = self._wi_attrs(index)
+            setattr(self, path_attr, "")
+            window = getattr(self, window_attr)
+            if window is not None:
+                window.close()
+                setattr(self, window_attr, None)
         self.update_work_instruction_action()
 
     def update_work_instruction_action(self):
         if hasattr(self, "view_wi_action"):
             self.view_wi_action.setEnabled(bool(self.wi_path))
+            self.open_wi2_action.setVisible(bool(self.wi_path))
+            self.view_wi2_action.setVisible(bool(self.wi2_path))
+            self.view_wi2_action.setEnabled(bool(self.wi2_path))
 
-    def view_work_instruction(self):
-        if not self.wi_path:
+    def view_work_instruction(self, index=1):
+        path_attr, window_attr = self._wi_attrs(index)
+        path = getattr(self, path_attr)
+        if not path:
             QMessageBox.information(self, "Work Instructions", "No Work Instruction is linked to this project.")
             return
-        if self.wi_window is not None and self.wi_window.doc:
-            self.wi_window.show()
-            self.wi_window.raise_()
-            self.wi_window.activateWindow()
-            self.wi_window.focus_viewer()
+        window = getattr(self, window_attr)
+        if window is not None and window.doc:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            window.focus_viewer()
             return
-        self.load_work_instruction(self.wi_path, show=True)
+        self.load_work_instruction(path, show=True, index=index)
 
     def jump_wi_to_slide(self, slide_value):
-        if self.auto_jump_to_slide and self.wi_window is not None and self.wi_window.doc:
-            self.wi_window.goto_slide(slide_value)
+        if not self.auto_jump_to_slide:
+            return
+        index, _ = parse_slide_ref(slide_value)
+        window = self.wi_window if index == 1 else self.wi2_window
+        if window is not None and window.doc:
+            window.goto_slide(slide_value)
 
     def link_slide_to_selected_row(self, slide_number):
         if self.view_mode != "video":
@@ -4215,6 +4263,7 @@ class TimeStudyApp(QMainWindow):
         project_data = {
             "version": 4, "active_video_path": self._make_relative_path(self.active_video_path, path), "last_position_ms": current_ms,
             "work_instruction_path": self._make_relative_path(self.wi_path, path),
+            "work_instruction_2_path": self._make_relative_path(self.wi2_path, path),
             "video_groups": groups_data, "custom_gen_cats": list(self.custom_gen_cats), "custom_spec_cats": list(self.custom_spec_cats),
             "custom_category_colors": {
                 cat_name: {"background": colors[0], "foreground": colors[1]}
@@ -4311,13 +4360,15 @@ class TimeStudyApp(QMainWindow):
         progress.close()
 
         self.close_work_instruction()
-        wi_stored = data.get("work_instruction_path", "")
-        if wi_stored:
+        for index, key in ((1, "work_instruction_path"), (2, "work_instruction_2_path")):
+            wi_stored = data.get(key, "")
+            if not wi_stored:
+                continue
             resolved_wi_path = self._resolve_project_path(wi_stored, path)
-            self.wi_path = resolved_wi_path
+            setattr(self, self._wi_attrs(index)[0], resolved_wi_path)
             self.update_work_instruction_action()
             if self.auto_open_wi_on_startup:
-                self.load_work_instruction(resolved_wi_path, show=True)
+                self.load_work_instruction(resolved_wi_path, show=True, index=index)
 
         filename = os.path.basename(path)
         self.setWindowTitle(f"Multi-Video Time Study Logger - {filename}")
