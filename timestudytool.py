@@ -380,8 +380,10 @@ class ParetoChartWidget(QWidget):
             return
 
         padding = 20
-        painter.translate(padding, padding)
-        w, h = self.width() - 2 * padding, self.height() - 2 * padding
+        left_padding = padding + 20
+        painter.translate(left_padding, padding)
+        w = self.width() - left_padding - padding
+        h = self.height() - 2 * padding
         title_font = QFont("Segoe UI", 13)
         axis_title_font = QFont("Segoe UI", 10, QFont.Bold)
         tick_font = QFont("Segoe UI", 9)
