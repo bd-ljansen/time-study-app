@@ -1262,6 +1262,7 @@ class TimeStudyApp(QMainWindow):
         # Last (group index, row index) selected in each tree, so mode switches return to the same row.
         self.last_video_selection = None
         self.last_category_selection = None
+        self.last_slide_selection = None
         # Mirrors the source spreadsheet's Pareto query, which drops Break and Other.
         self.pareto_excluded_cats = {"Break", "Other"}
         self.pareto_excluded_slides = set()
@@ -1333,7 +1334,7 @@ class TimeStudyApp(QMainWindow):
         if self.cap and self.cap.isOpened() and self.is_playing:
             
             # --- AUTO-ADVANCE LOGIC FOR CATEGORY MODE ---
-            if self.view_mode == "category" and getattr(self, 'active_category_item', None):
+            if self.view_mode in ("category", "slide") and getattr(self, 'active_category_item', None):
                 current_ms = int(self.cap.get(cv2.CAP_PROP_POS_MSEC))
                 end_ms = self.active_category_item.data(2, Qt.UserRole) or 0
                 
@@ -1860,14 +1861,14 @@ class TimeStudyApp(QMainWindow):
                     return True
 
             if key == Qt.Key_Left and (event.modifiers() & Qt.ControlModifier):
-                if self.view_mode == "category":
+                if self.view_mode in ("category", "slide"):
                     self.skip_to_category_segment_start()
                 else:
                     self.skip_to_segment_start()
                 return True
 
             if key == Qt.Key_Right and (event.modifiers() & Qt.ControlModifier):
-                if self.view_mode == "category":
+                if self.view_mode in ("category", "slide"):
                     self.skip_to_next_category_segment_start()
                 else:
                     self.skip_to_next_segment_start()
@@ -2304,7 +2305,7 @@ class TimeStudyApp(QMainWindow):
         self.view_mode_group = QButtonGroup(self)
         self.view_mode_group.setExclusive(True)
         self.view_mode_buttons = []
-        for i, label in enumerate(["🕒 Chronological", "📁 Category", "📊 Pareto (Category)", "📊 Pareto (Slide)"]):
+        for i, label in enumerate(["🕒 Chronological", "📁 Category", "📁 Slide", "📊 Pareto (Category)", "📊 Pareto (Slide)"]):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setFocusPolicy(Qt.NoFocus)
@@ -2314,7 +2315,7 @@ class TimeStudyApp(QMainWindow):
             tabs_layout.addWidget(btn)
         self.view_mode_buttons[0].setChecked(True)
         self.view_mode_group.idClicked.connect(self.toggle_view_mode)
-        table_controls.addWidget(tabs_container)
+        right_layout.addWidget(tabs_container)
 
         self.proj_status_label = QLabel("Project: Unsaved")
         self.proj_status_label.setStyleSheet("color: #888; font-style: italic; margin-left: 10px;")
@@ -2344,12 +2345,12 @@ class TimeStudyApp(QMainWindow):
         tree_controls = QHBoxLayout()
         self.collapse_btn = QPushButton("Collapse All")
         self.collapse_btn.setFocusPolicy(Qt.NoFocus)
-        self.collapse_btn.clicked.connect(lambda: self.video_tree.collapseAll() if self.view_mode == "video" else self.category_tree.collapseAll())
+        self.collapse_btn.clicked.connect(lambda: (self.video_tree if self.view_mode == "video" else self.slide_tree if self.view_mode == "slide" else self.category_tree).collapseAll())
         tree_controls.addWidget(self.collapse_btn)
         
         self.expand_btn = QPushButton("Expand All")
         self.expand_btn.setFocusPolicy(Qt.NoFocus)
-        self.expand_btn.clicked.connect(lambda: self.video_tree.expandAll() if self.view_mode == "video" else self.category_tree.expandAll())
+        self.expand_btn.clicked.connect(lambda: (self.video_tree if self.view_mode == "video" else self.slide_tree if self.view_mode == "slide" else self.category_tree).expandAll())
         tree_controls.addWidget(self.expand_btn)
         tree_controls.addStretch()
         right_layout.addLayout(tree_controls)
@@ -2408,6 +2409,26 @@ class TimeStudyApp(QMainWindow):
         self.category_tree.setColumnWidth(3, 160)
         self.category_tree.itemClicked.connect(lambda item, col: self.jump_wi_to_slide(item.text(0)))
         self.stacked_widget.addWidget(self.category_tree)
+
+        self.slide_tree = QTreeWidget()
+        self.slide_tree.setHeaderLabels(["Category", "Video File", "Description", "Duration"])
+        self.slide_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.slide_tree.setWordWrap(False)
+        self.slide_tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.slide_tree.setStyleSheet(tree_style)
+        slide_header = self.slide_tree.header()
+        slide_header.setStretchLastSection(False)
+        slide_header.setSectionResizeMode(0, QHeaderView.Interactive)
+        slide_header.setSectionResizeMode(1, QHeaderView.Interactive)
+        slide_header.setSectionResizeMode(2, QHeaderView.Stretch)
+        slide_header.setSectionResizeMode(3, QHeaderView.Interactive)
+        self.slide_tree.setColumnWidth(0, 200)
+        self.slide_tree.setColumnWidth(1, 220)
+        self.slide_tree.setColumnWidth(3, 160)
+        self.slide_tree.itemClicked.connect(
+            lambda item, col: self.jump_wi_to_slide(item.parent().text(0) if item.parent() else item.text(0))
+        )
+        self.stacked_widget.addWidget(self.slide_tree)
 
         # ---------- Pareto Mode Page ----------
         self.pareto_page = QWidget()
@@ -2512,6 +2533,10 @@ class TimeStudyApp(QMainWindow):
             item = self.category_tree.currentItem()
             if item is not None and getattr(item, 'g_idx', -1) >= 0:
                 self.last_category_selection = (item.g_idx, item.r_idx)
+        elif self.view_mode == "slide":
+            item = self.slide_tree.currentItem()
+            if item is not None and getattr(item, 'g_idx', -1) >= 0:
+                self.last_slide_selection = (item.g_idx, item.r_idx)
 
     def _restore_video_selection(self):
         if not self.last_video_selection or self.video_tree.topLevelItemCount() == 0:
@@ -2528,13 +2553,15 @@ class TimeStudyApp(QMainWindow):
         self.video_tree.scrollToItem(target)
 
     def _restore_category_selection(self):
-        if not self.last_category_selection:
+        selection = self.last_slide_selection if self.view_mode == "slide" else self.last_category_selection
+        tree = self.slide_tree if self.view_mode == "slide" else self.category_tree
+        if not selection:
             return
-        g_idx, r_idx = self.last_category_selection
+        g_idx, r_idx = selection
         best = None
         best_distance = None
-        for i in range(self.category_tree.topLevelItemCount()):
-            cat_grp = self.category_tree.topLevelItem(i)
+        for i in range(tree.topLevelItemCount()):
+            cat_grp = tree.topLevelItem(i)
             for c in range(cat_grp.childCount()):
                 child = cat_grp.child(c)
                 if getattr(child, 'g_idx', -1) != g_idx:
@@ -2548,17 +2575,17 @@ class TimeStudyApp(QMainWindow):
                 break
         if best is None:
             return
-        self.category_tree.setCurrentItem(best)
-        self.category_tree.scrollToItem(best)
+        tree.setCurrentItem(best)
+        tree.scrollToItem(best)
 
     def toggle_view_mode(self, index):
-        target_mode = ("video", "category", "pareto", "pareto_slide")[index]
+        target_mode = ("video", "category", "slide", "pareto", "pareto_slide")[index]
         if self.view_mode == target_mode:
             self.view_mode_buttons[index].setChecked(True)
             return
         self._capture_mode_selection()
         self.view_mode_buttons[index].setChecked(True)
-        if index in (2, 3):
+        if index in (3, 4):
             if self.view_mode == "video":
                 self.saved_video_state = self.get_current_state()
             self.view_mode = target_mode
@@ -2577,16 +2604,16 @@ class TimeStudyApp(QMainWindow):
             self.collapse_btn.setVisible(False)
             self.expand_btn.setVisible(False)
 
-            if index == 2:
+            if index == 3:
                 self.build_pareto_view()
             else:
                 self.build_slide_pareto_view()
             self.stacked_widget.setCurrentIndex(index)
             self.update_undo_redo_actions()
-        elif index == 1:
+        elif index in (1, 2):
             if self.view_mode == "video":
                 self.saved_video_state = self.get_current_state()
-            self.view_mode = "category"
+            self.view_mode = target_mode
             self.timer.stop()
             self.is_playing = False
             self.active_category_item = None
@@ -2599,14 +2626,17 @@ class TimeStudyApp(QMainWindow):
             self.open_vid_btn.setStyleSheet("background-color: #E2E8F0; color: #94A3B8; font-weight: bold;")
             
             # Toggle export/import buttons
-            self.export_vid_btn.setVisible(True)
+            self.export_vid_btn.setVisible(index == 1)
             self.import_excel_btn.setVisible(False)
             self.export_btn.setVisible(False)
             self.collapse_btn.setVisible(True)
             self.expand_btn.setVisible(True)
             
-            self.build_category_view()
-            self.stacked_widget.setCurrentIndex(1)
+            if index == 1:
+                self.build_category_view()
+            else:
+                self.build_slide_view()
+            self.stacked_widget.setCurrentIndex(index)
             self._restore_category_selection()
         else:
             self.view_mode = "video"
@@ -2740,12 +2770,18 @@ class TimeStudyApp(QMainWindow):
         self.refresh_slide_pareto_chart()
 
     def build_category_view(self):
-        self.category_tree.setUpdatesEnabled(False)
-        self.category_tree.clear()
+        self._build_grouped_view(self.category_tree, "category")
+
+    def build_slide_view(self):
+        self._build_grouped_view(self.slide_tree, "slide")
+
+    def _build_grouped_view(self, tree, grouping):
+        tree.setUpdatesEnabled(False)
+        tree.clear()
         cat_segments = {}
 
         for segment in self.get_category_segments(self.saved_video_state):
-            cat_spec = segment["cat_spec"]
+            cat_spec = segment["cat_spec"] if grouping == "category" else clean_slide_str(segment["slide"]) or "Unassigned"
             if cat_spec not in cat_segments:
                 cat_segments[cat_spec] = {"total_time": 0, "segments": []}
 
@@ -2758,12 +2794,15 @@ class TimeStudyApp(QMainWindow):
                 segment["slices"] = [segment]
                 segments.append(segment)
                 
-        sorted_cats = sorted(cat_segments.items(), key=lambda x: x[1]["total_time"], reverse=True)
+        if grouping == "slide":
+            sorted_cats = sorted(cat_segments.items(), key=lambda entry: (entry[0] == "Unassigned", int(entry[0]) if entry[0].isdigit() else float("inf"), entry[0]))
+        else:
+            sorted_cats = sorted(cat_segments.items(), key=lambda entry: entry[1]["total_time"], reverse=True)
         bold_font = QFont()
         bold_font.setBold(True)
         
         for cat_name, data in sorted_cats:
-            cat_item = QTreeWidgetItem(self.category_tree)
+            cat_item = QTreeWidgetItem(tree)
             cat_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             cat_item.setText(0, cat_name)
             cat_item.setText(3, self.format_ms(data["total_time"])) # Moved to col 3
@@ -2784,7 +2823,7 @@ class TimeStudyApp(QMainWindow):
                 
                 vid_display_name = f"Video {seg['video_g_idx'] + 1} ({seg['vid_name']})"
                 
-                child.setText(0, seg["slide"])
+                child.setText(0, seg["slide"] if grouping == "category" else seg["cat_spec"])
                 child.setText(1, vid_display_name)
                 child.setText(2, seg["desc"]) # Description is now col 2
                 
@@ -2804,10 +2843,10 @@ class TimeStudyApp(QMainWindow):
                     on_delete=None,
                     on_jump=lambda _, it=child: self.jump_to_video(it)
                 )
-                self.category_tree.setItemWidget(child, 3, action_widget) # Set to col 3
+                tree.setItemWidget(child, 3, action_widget) # Set to col 3
                 
-        self.category_tree.expandAll()
-        self.category_tree.setUpdatesEnabled(True)
+            tree.expandAll()
+            tree.setUpdatesEnabled(True)
 
     def _is_continuation_segment(self, previous_segment, segment):
         return (
@@ -3031,18 +3070,20 @@ class TimeStudyApp(QMainWindow):
             self.toggle_play()
 
     def get_next_category_segment(self, current_item):
+        tree = self.slide_tree if self.view_mode == "slide" else self.category_tree
         parent = current_item.parent()
         if not parent: return None
         idx = parent.indexOfChild(current_item)
         if idx + 1 < parent.childCount():
             return parent.child(idx + 1)
         else:
-            p_idx = self.category_tree.indexOfTopLevelItem(parent)
-            if p_idx + 1 < self.category_tree.topLevelItemCount():
-                return self.category_tree.topLevelItem(p_idx + 1).child(0)
+            p_idx = tree.indexOfTopLevelItem(parent)
+            if p_idx + 1 < tree.topLevelItemCount():
+                return tree.topLevelItem(p_idx + 1).child(0)
         return None
 
     def get_previous_category_segment(self, current_item):
+        tree = self.slide_tree if self.view_mode == "slide" else self.category_tree
         parent = current_item.parent()
         if not parent:
             return None
@@ -3050,9 +3091,9 @@ class TimeStudyApp(QMainWindow):
         if idx > 0:
             return parent.child(idx - 1)
 
-        p_idx = self.category_tree.indexOfTopLevelItem(parent)
+        p_idx = tree.indexOfTopLevelItem(parent)
         if p_idx > 0:
-            previous_parent = self.category_tree.topLevelItem(p_idx - 1)
+            previous_parent = tree.topLevelItem(p_idx - 1)
             if previous_parent.childCount() > 0:
                 return previous_parent.child(previous_parent.childCount() - 1)
         return None
@@ -3604,12 +3645,13 @@ class TimeStudyApp(QMainWindow):
     def highlight_active_row(self, pos_ms):
         if self.view_mode in ("pareto", "pareto_slide"):
             return
-        if self.view_mode == "category":
-            for g in range(self.category_tree.topLevelItemCount()):
-                group = self.category_tree.topLevelItem(g)
+        if self.view_mode in ("category", "slide"):
+            tree = self.slide_tree if self.view_mode == "slide" else self.category_tree
+            for g in range(tree.topLevelItemCount()):
+                group = tree.topLevelItem(g)
                 for c in range(group.childCount()):
                     child = group.child(c)
-                    w = self.category_tree.itemWidget(child, 3)
+                    w = tree.itemWidget(child, 3)
                     if not w: continue
                     is_active = (child == getattr(self, "active_category_item", None))
                     self.update_play_button_state(w, is_active)
