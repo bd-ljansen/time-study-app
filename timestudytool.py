@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QEvent, QObject, QRect, QRectF, QPointF, QSettings
 from PyQt5.QtGui import (
     QImage, QPixmap, QColor, QBrush, QFont, QPainter, QPen, QPolygonF,
-    QFontMetrics, QFontMetricsF, QPainterPath, QIcon
+    QFontMetrics, QIcon
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -379,14 +379,10 @@ class ParetoChartWidget(QWidget):
                              f"No {self.x_title.lower()} data to chart.\nLoad or open a project first.")
             return
 
-        padding = 20
-        left_padding = padding + 20
-        painter.translate(left_padding, padding)
-        w = self.width() - left_padding - padding
-        h = self.height() - 2 * padding
-        title_font = QFont("Segoe UI", 12)
-        axis_title_font = QFont("Segoe UI", 9, QFont.Bold)
-        tick_font = QFont("Segoe UI", 8)
+        w, h = self.width(), self.height()
+        title_font = QFont("Segoe UI", 13)
+        axis_title_font = QFont("Segoe UI", 10, QFont.Bold)
+        tick_font = QFont("Segoe UI", 9)
 
         # Title
         painter.setFont(title_font)
@@ -454,21 +450,17 @@ class ParetoChartWidget(QWidget):
             painter.drawEllipse(p, 3.2, 3.2)
 
         # Rotated category labels
-        label_metrics = QFontMetricsF(tick_font)
-        label_baseline = (label_metrics.ascent() - label_metrics.descent()) / 2
+        painter.setFont(tick_font)
+        painter.setPen(QColor(self.TEXT_COLOR))
         for i, text in enumerate(labels):
-            label_path = QPainterPath()
-            label_path.addText(
-                QPointF(-6 - label_metrics.horizontalAdvance(text), label_baseline),
-                tick_font, text)
             painter.save()
             painter.translate(left + slot * (i + 0.5), bottom + 8)
             painter.rotate(-45)
-            painter.fillPath(label_path, QColor(self.TEXT_COLOR))
+            painter.drawText(QRectF(-label_band - 10, -9, label_band + 4, 18),
+                             Qt.AlignRight | Qt.AlignVCenter, text)
             painter.restore()
 
         # Axis titles
-        painter.setPen(QColor(self.TEXT_COLOR))
         painter.setFont(axis_title_font)
         painter.drawText(QRectF(left, h - 30, plot.width(), 22), Qt.AlignCenter, self.x_title)
         painter.save()
