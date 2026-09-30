@@ -4492,6 +4492,9 @@ class TimeStudyApp(QMainWindow):
                     f"{total_seconds // 3600:02d}:{total_seconds // 60 % 60:02d}:{total_seconds % 60:02d}"
                 ])
             elapsed_ms += group.get("duration_ms") or 0
+        if groups_data:
+            total_seconds = int(elapsed_ms) // 1000
+            rows.append(["", "", "", "End", f"{total_seconds // 3600:02d}:{total_seconds // 60 % 60:02d}:{total_seconds % 60:02d}"])
 
         try:
             if extension == ".csv":
