@@ -6,6 +6,7 @@ import random
 import re
 import cv2
 import openpyxl
+from openpyxl.workbook.defined_name import DefinedName
 
 try:
     import pymupdf as fitz  # PyMuPDF, used to render Work Instruction PDFs
@@ -4498,11 +4499,56 @@ class TimeStudyApp(QMainWindow):
             else:
                 workbook = openpyxl.Workbook()
                 worksheet = workbook.active
+                worksheet.title = "Time Study"
                 for row in rows:
                     worksheet.append(row)
                     for cell in worksheet[worksheet.max_row]:
                         if cell.data_type == "f":
                             cell.data_type = "s"
+                worksheet.freeze_panes = "A2"
+                worksheet.auto_filter.ref = worksheet.dimensions
+                for column, width in {"A": 10, "B": 24, "C": 28, "D": 85, "E": 14}.items():
+                    worksheet.column_dimensions[column].width = width
+                for cell in worksheet[1]:
+                    cell.fill = PatternFill("solid", fgColor="FFBDD7EE")
+                    cell.font = Font(bold=True, color="FF17324D")
+                    cell.alignment = Alignment(vertical="center")
+                worksheet.row_dimensions[1].height = 24
+
+                options_sheet = workbook.create_sheet("Categories")
+                for column, option_name, choices in (
+                    ("B", "GeneralCategories", self.cat_general_options),
+                    ("C", "SpecificCategories", self.cat_specific_options),
+                ):
+                    options = list(dict.fromkeys(choices + [str(row[1 if column == "B" else 2]) for row in rows[1:] if row[1 if column == "B" else 2]]))
+                    for index, category in enumerate(options, start=1):
+                        options_sheet.cell(index, 1 if column == "B" else 2, category)
+                    list_column = "A" if column == "B" else "B"
+                    workbook.defined_names.add(DefinedName(option_name, attr_text=f"'Categories'!${list_column}$1:${list_column}${max(len(options), 1)}"))
+                    validation = DataValidation(type="list", formula1=f"={option_name}", allow_blank=True)
+                    validation.showErrorMessage = False
+                    worksheet.add_data_validation(validation)
+                    validation.add(f"{column}2:{column}{max(worksheet.max_row, 2)}")
+                    for category in options:
+                        if category not in CATEGORY_COLORS:
+                            continue
+                        bg, fg = CATEGORY_COLORS[category]
+                        formula = '"' + category.replace('"', '""') + '"'
+                        worksheet.conditional_formatting.add(
+                            f"{column}2:{column}{max(worksheet.max_row, 2)}",
+                            CellIsRule(operator="equal", formula=[formula],
+                                       fill=PatternFill("solid", fgColor="FF" + bg.lstrip("#")),
+                                       font=Font(color="FF" + fg.lstrip("#")))
+                        )
+                options_sheet.sheet_state = "hidden"
+                for cells in worksheet.iter_rows(min_row=2):
+                    for cell in (cells[0], cells[4]):
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    for cell in (cells[1], cells[2]):
+                        if cell.value in CATEGORY_COLORS:
+                            bg, fg = CATEGORY_COLORS[cell.value]
+                            cell.fill = PatternFill("solid", fgColor="FF" + bg.lstrip("#"))
+                            cell.font = Font(color="FF" + fg.lstrip("#"))
                 workbook.save(path)
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export file:\n{str(e)}")
