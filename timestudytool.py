@@ -4480,17 +4480,17 @@ class TimeStudyApp(QMainWindow):
 
         groups_data = self.saved_video_state if self.view_mode != "video" else self.get_current_state()
         rows = [["Slide", "Category, General", "Category, Specific", "Description", "Time"]]
-        for index, group in enumerate(groups_data, start=1):
-            rows.append(["", "", "", f"START VIDEO {index}", "00:00"])
+        elapsed_ms = 0
+        for group in groups_data:
             for row in group.get("rows", []):
                 rows.append([
                     row.get("slide", ""),
                     row.get("cat_gen", ""),
                     row.get("cat_spec", ""),
                     row.get("desc", ""),
-                    row.get("time_str", "00:00")
+                    self.format_ms(elapsed_ms + self.parse_time_ms(row.get("time_ms"), row.get("time_str")))
                 ])
-            rows.append(["", "", "", f"END VIDEO {index}", self.format_ms(group.get("duration_ms", 0))])
+            elapsed_ms += group.get("duration_ms") or 0
 
         try:
             if extension == ".csv":
