@@ -4483,12 +4483,13 @@ class TimeStudyApp(QMainWindow):
         elapsed_ms = 0
         for group in groups_data:
             for row in group.get("rows", []):
+                total_seconds = int(elapsed_ms + self.parse_time_ms(row.get("time_ms"), row.get("time_str"))) // 1000
                 rows.append([
                     row.get("slide", ""),
                     row.get("cat_gen", ""),
                     row.get("cat_spec", ""),
                     row.get("desc", ""),
-                    self.format_ms(elapsed_ms + self.parse_time_ms(row.get("time_ms"), row.get("time_str")))
+                    f"{total_seconds // 3600:02d}:{total_seconds // 60 % 60:02d}:{total_seconds % 60:02d}"
                 ])
             elapsed_ms += group.get("duration_ms") or 0
 
