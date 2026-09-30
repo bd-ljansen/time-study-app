@@ -1926,7 +1926,7 @@ class TimeStudyApp(QMainWindow):
         import_action.setShortcut("Ctrl+I")
         import_action.triggered.connect(self.import_project_dialog)
         file_menu.addAction(import_action)
-        import_excel_action = QAction("Import from Excel (.xlsx)...", self)
+        import_excel_action = QAction("Import...", self)
         import_excel_action.triggered.connect(self.import_from_excel)
         file_menu.addAction(import_excel_action)
         open_wi_action = QAction("Open WI (PDF)...", self)
@@ -1945,7 +1945,7 @@ class TimeStudyApp(QMainWindow):
         save_as_action.triggered.connect(self.save_project_as)
         file_menu.addAction(save_as_action)
         file_menu.addSeparator()
-        export_csv_action = QAction("Export to CSV (.csv)...", self)
+        export_csv_action = QAction("Export...", self)
         export_csv_action.triggered.connect(self.export_to_csv)
         file_menu.addAction(export_csv_action)
         edit_menu = menu_bar.addMenu("Edit")
@@ -2358,13 +2358,13 @@ class TimeStudyApp(QMainWindow):
         self.export_vid_btn.setVisible(False) # Hide initially
         table_controls.addWidget(self.export_vid_btn)
 
-        self.import_excel_btn = QPushButton("Import from Excel (.xlsx)")
+        self.import_excel_btn = QPushButton("Import")
         self.import_excel_btn.setFocusPolicy(Qt.NoFocus)
         self.import_excel_btn.setStyleSheet("background-color: #0284c7; color: white; font-weight: bold;")
         self.import_excel_btn.clicked.connect(self.import_from_excel)
         table_controls.addWidget(self.import_excel_btn)
         
-        self.export_btn = QPushButton("Export to CSV (.csv)")
+        self.export_btn = QPushButton("Export")
         self.export_btn.setFocusPolicy(Qt.NoFocus)
         self.export_btn.setStyleSheet("background-color: #28a745; color: white; font-weight: bold;")
         self.export_btn.clicked.connect(self.export_to_csv)
@@ -3388,35 +3388,45 @@ class TimeStudyApp(QMainWindow):
         self.refresh_playback_ui()
 
     def import_from_excel(self):
-        excel_path, _ = QFileDialog.getOpenFileName(self, "Import Excel Spreadsheet", self._default_browse_dir(), "Excel Workbook (*.xlsx *.xls)")
-        if not excel_path: return
+        import_path, _ = QFileDialog.getOpenFileName(self, "Import", self._default_browse_dir(), "Excel Workbook (*.xlsx *.xlsm);;CSV Files (*.csv)")
+        if not import_path: return
+        is_csv = import_path.lower().endswith(".csv")
         progress = QProgressDialog(self)
         progress.setWindowTitle("Loading")
-        progress.setLabelText("Opening Excel file (this may take a moment)...")
+        progress.setLabelText("Opening file (this may take a moment)...")
         progress.setRange(0, 0)
         progress.setCancelButton(None)
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
         QApplication.processEvents()
         try:
-            wb = openpyxl.load_workbook(excel_path, data_only=True)
-            sheet_names = wb.sheetnames
-            progress.close()
-            if not sheet_names:
-                QMessageBox.critical(self, "Excel Load Error", "No worksheets found in workbook.")
-                return
-            if len(sheet_names) == 1:
-                selected_sheet = sheet_names[0]
+            if is_csv:
+                with open(import_path, newline="", encoding="utf-8-sig") as csv_file:
+                    cells_grid = list(csv.reader(csv_file))
+                if cells_grid and cells_grid[0][:5] == ["Slide", "Category, General", "Category, Specific", "Description", "Time"]:
+                    cells_grid = cells_grid[1:]
+                source_name = os.path.basename(import_path)
             else:
-                selected_sheet, ok = QInputDialog.getItem(self, "Select Worksheet", "Choose the worksheet to import data from:", sheet_names, 0, False)
-                if not ok or not selected_sheet: return
-            ws = wb[selected_sheet]
+                wb = openpyxl.load_workbook(import_path, data_only=True)
+                sheet_names = wb.sheetnames
+                progress.close()
+                if not sheet_names:
+                    QMessageBox.critical(self, "Excel Load Error", "No worksheets found in workbook.")
+                    return
+                if len(sheet_names) == 1:
+                    selected_sheet = sheet_names[0]
+                else:
+                    selected_sheet, ok = QInputDialog.getItem(self, "Select Worksheet", "Choose the worksheet to import data from:", sheet_names, 0, False)
+                    if not ok or not selected_sheet: return
+                ws = wb[selected_sheet]
+                source_name = f"sheet '{selected_sheet}'"
         except Exception as e:
             progress.close()
-            QMessageBox.critical(self, "Excel Load Error", f"Failed to open Excel file:\n{str(e)}")
+            QMessageBox.critical(self, "Import Error", f"Failed to open file:\n{str(e)}")
             return
-        range_str, ok = QInputDialog.getText(self, "Define Import Cell Range", f"Enter cell range from sheet '{selected_sheet}'\n(Col 1: Slide, 2: Gen Cat, 3: Spec Cat, 4: Desc, 5: Time):\nExample: A4:E250 or A2:E100", QLineEdit.Normal, "A2:E100")
-        if not ok or not range_str.strip(): return
+        if not is_csv:
+            range_str, ok = QInputDialog.getText(self, "Define Import Cell Range", f"Enter cell range from sheet '{selected_sheet}'\n(Col 1: Slide, 2: Gen Cat, 3: Spec Cat, 4: Desc, 5: Time):\nExample: A4:E250 or A2:E100", QLineEdit.Normal, f"A2:E{max(ws.max_row, 2)}")
+            if not ok or not range_str.strip(): return
         progress = QProgressDialog(self)
         progress.setWindowTitle("Importing")
         progress.setLabelText("Parsing rows...")
@@ -3425,20 +3435,21 @@ class TimeStudyApp(QMainWindow):
         progress.setWindowModality(Qt.WindowModal)
         progress.show()
         QApplication.processEvents()
-        try:
-            cells_grid = ws[range_str.strip().upper()]
-            if isinstance(cells_grid, openpyxl.cell.cell.Cell): cells_grid = ((cells_grid,),)
-            elif len(cells_grid) > 0 and isinstance(cells_grid[0], openpyxl.cell.cell.Cell): cells_grid = (cells_grid,)
-        except Exception as e:
-            progress.close()
-            QMessageBox.critical(self, "Invalid Range", f"Invalid cell range '{range_str}':\n{str(e)}")
-            return
+        if not is_csv:
+            try:
+                cells_grid = ws[range_str.strip().upper()]
+                if isinstance(cells_grid, openpyxl.cell.cell.Cell): cells_grid = ((cells_grid,),)
+                elif len(cells_grid) > 0 and isinstance(cells_grid[0], openpyxl.cell.cell.Cell): cells_grid = (cells_grid,)
+            except Exception as e:
+                progress.close()
+                QMessageBox.critical(self, "Invalid Range", f"Invalid cell range '{range_str}':\n{str(e)}")
+                return
         parsed_groups = []
         current_rows = []
         current_group_name = "Imported Video 1"
         has_active_group = False
         for row_cells in cells_grid:
-            vals = [c.value if c.value is not None else "" for c in row_cells]
+            vals = [value if value is not None else "" for value in (row_cells if is_csv else (cell.value for cell in row_cells))]
             if len(vals) < 5: vals += [""] * (5 - len(vals))
             slide = clean_slide_str(vals[0])
             cat_gen = str(vals[1]).strip()
@@ -3471,13 +3482,13 @@ class TimeStudyApp(QMainWindow):
             parsed_groups.append({"name": current_group_name, "rows": current_rows})
         progress.close()
         if not parsed_groups:
-            QMessageBox.information(self, "No Data Found", f"No valid rows found in range {range_str} of sheet '{selected_sheet}'.")
+            QMessageBox.information(self, "No Data Found", f"No valid rows found in {source_name}.")
             return
         self._scan_and_add_custom_categories(parsed_groups)
         if self.video_tree.topLevelItemCount() > 0:
             msg = QMessageBox(self)
             msg.setWindowTitle("Import Options")
-            msg.setText(f"Found {len(parsed_groups)} video group(s) in sheet '{selected_sheet}'. Choose import mode:")
+            msg.setText(f"Found {len(parsed_groups)} video group(s) in {source_name}. Choose import mode:")
             btn_replace = msg.addButton("Replace Session", QMessageBox.AcceptRole)
             btn_merge = msg.addButton("Merge Groups", QMessageBox.ActionRole)
             btn_cancel = msg.addButton(QMessageBox.Cancel)
@@ -3498,7 +3509,7 @@ class TimeStudyApp(QMainWindow):
         self.renumber_video_groups()
         self.refresh_all_combos()
         self.refresh_playback_ui()
-        QMessageBox.information(self, "Import Complete", f"Successfully imported {len(parsed_groups)} video group(s) from sheet '{selected_sheet}'!")
+        QMessageBox.information(self, "Import Complete", f"Successfully imported {len(parsed_groups)} video group(s) from {source_name}!")
 
     def on_tree_item_changed(self, item, column):
         if not self.is_restoring_state and self.view_mode == "video":
@@ -4459,32 +4470,43 @@ class TimeStudyApp(QMainWindow):
         self._remember_recent_project(path)
 
     def export_to_csv(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export to CSV", self._default_browse_dir(), "CSV Files (*.csv)")
+        path, selected_filter = QFileDialog.getSaveFileName(self, "Export", self._default_browse_dir(), "CSV Files (*.csv);;Excel Workbook (*.xlsx)")
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
+        extension = ".xlsx" if selected_filter.startswith("Excel") else ".csv"
+        if not path.lower().endswith(extension):
+            path = os.path.splitext(path)[0] + extension if path.lower().endswith((".csv", ".xlsx")) else path + extension
 
         groups_data = self.saved_video_state if self.view_mode != "video" else self.get_current_state()
-
-        with open(path, "w", newline="", encoding="utf-8-sig") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(["Slide", "Category, General", "Category, Specific", "Description", "Time"])
-
-            for index, group in enumerate(groups_data, start=1):
-                writer.writerow(["", "", "", f"START VIDEO {index}", "00:00"])
-                for row in group.get("rows", []):
-                    writer.writerow([
-                        row.get("slide", ""),
-                        row.get("cat_gen", ""),
-                        row.get("cat_spec", ""),
-                        row.get("desc", ""),
-                        row.get("time_str", "00:00")
-                    ])
-                writer.writerow([
-                    "", "", "", f"END VIDEO {index}",
-                    self.format_ms(group.get("duration_ms", 0))
+        rows = [["Slide", "Category, General", "Category, Specific", "Description", "Time"]]
+        for index, group in enumerate(groups_data, start=1):
+            rows.append(["", "", "", f"START VIDEO {index}", "00:00"])
+            for row in group.get("rows", []):
+                rows.append([
+                    row.get("slide", ""),
+                    row.get("cat_gen", ""),
+                    row.get("cat_spec", ""),
+                    row.get("desc", ""),
+                    row.get("time_str", "00:00")
                 ])
+            rows.append(["", "", "", f"END VIDEO {index}", self.format_ms(group.get("duration_ms", 0))])
+
+        try:
+            if extension == ".csv":
+                with open(path, "w", newline="", encoding="utf-8-sig") as csv_file:
+                    csv.writer(csv_file).writerows(rows)
+            else:
+                workbook = openpyxl.Workbook()
+                worksheet = workbook.active
+                for row in rows:
+                    worksheet.append(row)
+                    for cell in worksheet[worksheet.max_row]:
+                        if cell.data_type == "f":
+                            cell.data_type = "s"
+                workbook.save(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export file:\n{str(e)}")
+            return
 
         QMessageBox.information(self, "Export Complete", f"Exported successfully to:\n{path}")
 
