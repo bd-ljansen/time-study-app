@@ -2901,6 +2901,7 @@ class TimeStudyApp(QMainWindow):
             self.pareto_excluded_cats.discard(cat_name)
         else:
             self.pareto_excluded_cats.add(cat_name)
+        self.unsaved_changes = True
         self.refresh_pareto_chart()
 
     def set_all_pareto_categories(self, checked):
@@ -2914,6 +2915,7 @@ class TimeStudyApp(QMainWindow):
             else:
                 self.pareto_excluded_cats.add(cat_name)
         self.pareto_exclude_list.blockSignals(False)
+        self.unsaved_changes = True
         self.refresh_pareto_chart()
 
     def get_pareto_slide_totals(self):
@@ -2953,6 +2955,7 @@ class TimeStudyApp(QMainWindow):
             self.pareto_excluded_slides.discard(slide)
         else:
             self.pareto_excluded_slides.add(slide)
+        self.unsaved_changes = True
         self.refresh_slide_pareto_chart()
 
     def set_all_pareto_slides(self, checked):
@@ -2966,6 +2969,7 @@ class TimeStudyApp(QMainWindow):
             else:
                 self.pareto_excluded_slides.add(slide)
         self.slide_pareto_exclude_list.blockSignals(False)
+        self.unsaved_changes = True
         self.refresh_slide_pareto_chart()
 
     def build_category_view(self):
@@ -4310,6 +4314,8 @@ class TimeStudyApp(QMainWindow):
         self.custom_spec_cats.clear()
         self._clear_custom_category_colors()
         self._reset_category_options_to_defaults()
+        self.pareto_excluded_cats = {"Break", "Other"}
+        self.pareto_excluded_slides = set()
         
         self.project_path = ""
         self.active_video_path = ""
@@ -4478,7 +4484,9 @@ class TimeStudyApp(QMainWindow):
             "custom_category_colors": {
                 cat_name: {"background": colors[0], "foreground": colors[1]}
                 for cat_name, colors in self.custom_category_colors.items()
-            }
+            },
+            "pareto_excluded_cats": sorted(self.pareto_excluded_cats),
+            "pareto_excluded_slides": sorted(self.pareto_excluded_slides),
         }
         try:
             with open(path, 'w', encoding='utf-8') as f: json.dump(project_data, f, indent=4)
@@ -4538,6 +4546,8 @@ class TimeStudyApp(QMainWindow):
         self._reset_category_options_to_defaults()
         self._load_saved_category_colors(data.get("custom_category_colors", {}))
         self._load_custom_categories(data.get("custom_gen_cats", []), data.get("custom_spec_cats", []))
+        self.pareto_excluded_cats = set(data.get("pareto_excluded_cats", ["Break", "Other"]))
+        self.pareto_excluded_slides = set(data.get("pareto_excluded_slides", []))
 
         video_groups = data.get("video_groups", [])
         if not video_groups and ("video_path" in data or "rows" in data):
