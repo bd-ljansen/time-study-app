@@ -1110,6 +1110,41 @@ class SettingsDialog(QDialog):
             app.global_timestamps,
             app.set_global_timestamps,
         )
+        section = QLabel("IGNORED CATEGORIES")
+        section.setObjectName("settingsSection")
+        content_layout.addWidget(section)
+        add_layout = QHBoxLayout()
+        self.ignored_category_combo = QComboBox()
+        categories = set(app.cat_general_options + app.cat_specific_options)
+        categories.update(app.ignored_chronological_categories)
+        for group_index in range(app.video_tree.topLevelItemCount()):
+            group = app.video_tree.topLevelItem(group_index)
+            for row_index in range(max(0, group.childCount() - 1)):
+                for column in (1, 2):
+                    categories.add(group.child(row_index).data(column, Qt.UserRole) or "")
+        self.ignored_category_combo.addItems(sorted(categories - {"", "+ Add New Category..."}, key=str.casefold))
+        add_layout.addWidget(self.ignored_category_combo, 1)
+        add_button = QToolButton()
+        add_button.setIcon(self.style().standardIcon(QStyle.SP_DialogYesButton))
+        add_button.setToolTip("Add category to ignored list")
+        add_button.clicked.connect(self._add_ignored_category)
+        add_layout.addWidget(add_button)
+        content_layout.addLayout(add_layout)
+        self.ignored_category_list = QListWidget()
+        self.ignored_category_list.addItems(sorted(app.ignored_chronological_categories, key=str.casefold))
+        content_layout.addWidget(self.ignored_category_list, 1)
+        remove_layout = QHBoxLayout()
+        remove_layout.addStretch()
+        remove_button = QToolButton()
+        remove_button.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+        remove_button.setToolTip("Remove selected category from ignored list")
+        remove_button.setEnabled(False)
+        self.ignored_category_list.itemSelectionChanged.connect(
+            lambda: remove_button.setEnabled(bool(self.ignored_category_list.selectedItems()))
+        )
+        remove_button.clicked.connect(self._remove_ignored_category)
+        remove_layout.addWidget(remove_button)
+        content_layout.addLayout(remove_layout)
         content_layout.addStretch()
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -1118,6 +1153,23 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(close_button)
         content_layout.addLayout(button_layout)
         return content
+
+    def _add_ignored_category(self):
+        category = self.ignored_category_combo.currentText()
+        if category and category not in self.app.ignored_chronological_categories:
+            self.ignored_category_list.addItem(category)
+            self._save_ignored_categories()
+
+    def _remove_ignored_category(self):
+        for item in self.ignored_category_list.selectedItems():
+            self.ignored_category_list.takeItem(self.ignored_category_list.row(item))
+        self._save_ignored_categories()
+
+    def _save_ignored_categories(self):
+        self.app.set_ignored_chronological_categories([
+            self.ignored_category_list.item(index).text()
+            for index in range(self.ignored_category_list.count())
+        ])
 
     def _build_wi_page(self, app):
         content = QWidget()
@@ -1300,6 +1352,7 @@ class TimeStudyApp(QMainWindow):
         self.auto_jump_to_slide = self.settings.value("wi/auto_jump_to_slide", True, type=bool)
         self.auto_open_wi_on_startup = self.settings.value("wi/auto_open_on_startup", True, type=bool)
         self.global_timestamps = self.settings.value("timestamps/global", False, type=bool)
+        self.ignored_chronological_categories = set(self.settings.value("timestamps/ignored_categories", [], type=list))
         self.settings.remove("ui/dark_mode")
 
         self.unsaved_changes = False
@@ -1386,25 +1439,73 @@ class TimeStudyApp(QMainWindow):
             preceding_group = self.video_tree.topLevelItem(index)
             if preceding_group == group:
                 return offset_ms
-            offset_ms += preceding_group.data(1, Qt.UserRole) or 0
+            duration_ms = preceding_group.data(1, Qt.UserRole) or 0
+            offset_ms += duration_ms - self.ignored_duration_before(duration_ms, preceding_group)
         return 0
 
+    def is_chronological_row_ignored(self, item):
+        return bool(item and item.parent() and "END VIDEO" not in item.text(3) and any(
+            (item.data(column, Qt.UserRole) or "") in self.ignored_chronological_categories
+            for column in (1, 2)
+        ))
+
+    def ignored_duration_before(self, ms, group):
+        if group is None or self.view_mode != "video" or not self.ignored_chronological_categories:
+            return 0
+        intervals = []
+        for row in range(max(0, group.childCount() - 1)):
+            item = group.child(row)
+            if self.is_chronological_row_ignored(item):
+                start = item.data(4, Qt.UserRole) or 0
+                end = group.child(row + 1).data(4, Qt.UserRole) or 0
+                if end > start:
+                    intervals.append((max(0, start), min(ms, end)))
+        removed_ms = 0
+        previous_end = 0
+        for start, end in sorted(intervals):
+            removed_ms += max(0, end - max(start, previous_end))
+            previous_end = max(previous_end, end)
+        return removed_ms
+
     def format_timestamp(self, ms, group):
-        return self.format_ms(ms + self.timestamp_offset_ms(group))
+        return self.format_ms(ms - self.ignored_duration_before(ms, group) + self.timestamp_offset_ms(group))
 
     def refresh_timestamp_display(self):
+        signals_blocked = self.video_tree.blockSignals(True)
         for index in range(self.video_tree.topLevelItemCount()):
             group = self.video_tree.topLevelItem(index)
             for item in [group] + [group.child(row) for row in range(group.childCount())]:
-                text = self.format_timestamp(item.data(4, Qt.UserRole) or 0, group)
+                ignored = self.is_chronological_row_ignored(item)
+                if item.parent() and "END VIDEO" not in item.text(3):
+                    item.setDisabled(ignored)
+                    if ignored:
+                        item.setSelected(False)
+                        if self.time_editing_item == item:
+                            self.set_time_edit_mode(None)
+                    for column in range(5):
+                        item.setBackground(column, QBrush(QColor("#E5E7EB")) if ignored else QBrush())
+                        item.setForeground(column, QBrush(QColor("#9CA3AF")) if ignored else QBrush())
+                    for column in (1, 2, 4):
+                        child_widget = self.video_tree.itemWidget(item, column)
+                        if child_widget:
+                            child_widget.setEnabled(not ignored)
+                            if column in (1, 2):
+                                if ignored:
+                                    child_widget.setStyleSheet("QComboBox { background: #E5E7EB; color: #9CA3AF; border: none; padding: 3px 10px; }")
+                                else:
+                                    self.apply_chip_style(child_widget)
+                text = "" if ignored else self.format_timestamp(item.data(4, Qt.UserRole) or 0, group)
                 widget = self.video_tree.itemWidget(item, 4)
                 if widget and hasattr(widget, "time_edit"):
                     if widget.time_edit.text() != text:
+                        editing_signals_blocked = widget.time_edit.blockSignals(True)
                         widget.time_edit.setText(text)
+                        widget.time_edit.blockSignals(editing_signals_blocked)
                 elif widget and hasattr(widget, "time_label"):
                     widget.time_label.setText(text)
                 else:
                     item.setText(4, text)
+        self.video_tree.blockSignals(signals_blocked)
 
     def next_frame(self):
         """Advances the video by a single frame and updates the UI."""
@@ -2068,6 +2169,13 @@ class TimeStudyApp(QMainWindow):
     def set_global_timestamps(self, enabled):
         self.global_timestamps = enabled
         self.settings.setValue("timestamps/global", enabled)
+        self.settings.sync()
+        self.refresh_playback_ui()
+
+    def set_ignored_chronological_categories(self, categories):
+        self.set_time_edit_mode(None)
+        self.ignored_chronological_categories = set(categories)
+        self.settings.setValue("timestamps/ignored_categories", sorted(self.ignored_chronological_categories))
         self.settings.sync()
         self.refresh_playback_ui()
 
@@ -3228,6 +3336,7 @@ class TimeStudyApp(QMainWindow):
                 item.setData(role_col, Qt.UserRole, text)
                 self.apply_chip_style(combo)
                 self.push_state()
+                self.refresh_playback_ui()
 
         combo.currentTextChanged.connect(on_change)
         return combo
@@ -3255,6 +3364,7 @@ class TimeStudyApp(QMainWindow):
             item.setData(role_col, Qt.UserRole, clean_cat)
             self.refresh_all_combos()
             self.push_state()
+            self.refresh_playback_ui()
         else:
             combo.setCurrentText(prev_val)
             self.apply_chip_style(combo)
@@ -3808,7 +3918,7 @@ class TimeStudyApp(QMainWindow):
                 item = group.child(i)
                 w = self.video_tree.itemWidget(item, 4)
                 if not w: continue
-                is_active_item = (item == active_item)
+                is_active_item = (item == active_item and not self.is_chronological_row_ignored(item))
                 self.update_play_button_state(w, is_active_item)
                 if isinstance(w, TimeColumnWidget):
                     if is_active_item and i < child_count - 1:
@@ -3888,17 +3998,20 @@ class TimeStudyApp(QMainWindow):
             combo.setStyleSheet(f"QComboBox {{ border-radius: 11px; padding: 3px 10px; background-color: {bg}; color: {fg}; font-weight: bold; font-size: 14px; border: 1px solid {bg}; }} QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: top right; width: 16px; border: none; }} QComboBox::down-arrow {{ image: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid {fg}; margin-right: 4px; }}")
 
     def set_time_edit_mode(self, item, focus_ui=True):
+        if self.is_chronological_row_ignored(item):
+            item = None
         self.time_editing_item = item
         if focus_ui and item and item.parent() is not None and "END VIDEO" not in item.text(3):
             w = self.video_tree.itemWidget(item, 4)
             if w and hasattr(w, 'time_edit'): w.time_edit.setFocus()
 
     def commit_time_edit(self, item):
-        if not item or not item.parent(): return
+        if not item or not item.parent() or self.is_chronological_row_ignored(item): return
         w = self.video_tree.itemWidget(item, 4)
         if w and hasattr(w, 'time_edit'):
             raw_text = w.time_edit.text()
-            new_ms = self.parse_time_ms(None, raw_text) - self.timestamp_offset_ms(item.parent())
+            old_ms = item.data(4, Qt.UserRole) or 0
+            new_ms = self.parse_time_ms(None, raw_text) - self.timestamp_offset_ms(item.parent()) + self.ignored_duration_before(old_ms, item.parent())
             group_dur = item.parent().data(1, Qt.UserRole) or self.duration_ms
             new_ms = max(0, min(group_dur, new_ms))
             new_str = self.format_ms(new_ms)
@@ -3913,13 +4026,10 @@ class TimeStudyApp(QMainWindow):
 
     def nudge_editing_time(self, delta_ms):
         item = self.time_editing_item
-        if not item or not item.parent(): return
+        if not item or not item.parent() or self.is_chronological_row_ignored(item): return
         w = self.video_tree.itemWidget(item, 4)
         if w:
-            time_val_str = w.time_edit.text() if hasattr(w, 'time_edit') else item.data(4, Qt.UserRole + 1)
-            curr_ms = self.parse_time_ms(item.data(4, Qt.UserRole), time_val_str)
-            if hasattr(w, 'time_edit'):
-                curr_ms -= self.timestamp_offset_ms(item.parent())
+            curr_ms = item.data(4, Qt.UserRole) or 0
             group_dur = item.parent().data(1, Qt.UserRole) or self.duration_ms
             new_ms = max(0, min(group_dur, curr_ms + delta_ms))
             new_str = self.format_ms(new_ms)
@@ -3933,6 +4043,7 @@ class TimeStudyApp(QMainWindow):
         self.refresh_playback_ui()
 
     def on_tree_item_clicked(self, item, column):
+        if self.is_chronological_row_ignored(item): return
         self.jump_wi_to_slide(item.text(0))
         if self.view_mode != "video": return
         if item.parent() is not None and "END VIDEO" not in item.text(3):
@@ -3947,7 +4058,7 @@ class TimeStudyApp(QMainWindow):
             self.set_time_edit_mode(None)
 
     def on_tree_item_double_clicked(self, item, column):
-        if self.view_mode != "video": return
+        if self.view_mode != "video" or self.is_chronological_row_ignored(item): return
         if item.parent() is None:
             self.switch_active_video(item, 0)
         elif column == 4 and "END VIDEO" not in item.text(3):
