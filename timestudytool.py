@@ -1434,6 +1434,9 @@ class TimeStudyApp(QMainWindow):
     def timestamp_offset_ms(self, group):
         if not self.global_timestamps or group is None:
             return 0
+        cache = getattr(self, "_ts_offset_cache", None)
+        if cache is not None and id(group) in cache:
+            return cache[id(group)]
         offset_ms = 0
         for index in range(self.video_tree.topLevelItemCount()):
             preceding_group = self.video_tree.topLevelItem(index)
@@ -1471,21 +1474,37 @@ class TimeStudyApp(QMainWindow):
         return self.format_ms(ms - self.ignored_duration_before(ms, group) + self.timestamp_offset_ms(group))
 
     def refresh_timestamp_display(self):
+        self._ts_offset_cache = {}
+        running_offset = 0
+        for index in range(self.video_tree.topLevelItemCount()):
+            group = self.video_tree.topLevelItem(index)
+            self._ts_offset_cache[id(group)] = running_offset
+            duration_ms = group.data(1, Qt.UserRole) or 0
+            running_offset += duration_ms - self.ignored_duration_before(duration_ms, group)
+        try:
+            self._refresh_timestamp_display()
+        finally:
+            self._ts_offset_cache = None
+
+    def _refresh_timestamp_display(self):
         signals_blocked = self.video_tree.blockSignals(True)
         for index in range(self.video_tree.topLevelItemCount()):
             group = self.video_tree.topLevelItem(index)
             for item in [group] + [group.child(row) for row in range(group.childCount())]:
                 ignored = self.is_chronological_row_ignored(item)
                 if item.parent() and "END VIDEO" not in item.text(3):
-                    item.setDisabled(ignored)
-                    if ignored:
+                    was_ignored = bool(item.data(0, Qt.UserRole + 50))
+                    item.setData(0, Qt.UserRole + 50, ignored)
+                    if was_ignored != ignored:
+                        item.setDisabled(ignored)
+                    if was_ignored != ignored and ignored:
                         item.setSelected(False)
                         if self.time_editing_item == item:
                             self.set_time_edit_mode(None)
-                    for column in range(5):
+                    for column in (range(5) if was_ignored != ignored else ()):
                         item.setBackground(column, QBrush(QColor("#E5E7EB")) if ignored else QBrush())
                         item.setForeground(column, QBrush(QColor("#9CA3AF")) if ignored else QBrush())
-                    for column in (1, 2, 4):
+                    for column in ((1, 2, 4) if was_ignored != ignored else ()):
                         child_widget = self.video_tree.itemWidget(item, column)
                         if child_widget:
                             child_widget.setEnabled(not ignored)
@@ -4171,6 +4190,7 @@ class TimeStudyApp(QMainWindow):
             if child_count > 0:
                 end_item = group.child(child_count - 1)
                 end_item.setText(3, f"END VIDEO {i + 1}")
+        if not self.is_restoring_state:
             self.refresh_timestamp_display()
 
     def switch_active_video(self, group_item, target_ms=0):
