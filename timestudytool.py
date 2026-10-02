@@ -1080,11 +1080,13 @@ class SettingsDialog(QDialog):
         self.categories.setFixedWidth(215)
         self.categories.addItem("WI pop-out")
         self.categories.addItem("Categories")
+        self.categories.addItem("Timestamps")
         layout.addWidget(self.categories)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self._build_wi_page(app))
         self.pages.addWidget(self._build_categories_page(app))
+        self.pages.addWidget(self._build_timestamps_page(app))
         layout.addWidget(self.pages, 1)
 
         self.categories.currentRowChanged.connect(self._show_category)
@@ -1092,6 +1094,30 @@ class SettingsDialog(QDialog):
 
     def _show_category(self, index):
         self.pages.setCurrentIndex(index)
+
+    def _build_timestamps_page(self, app):
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(32, 26, 32, 24)
+        content_layout.setSpacing(18)
+        title = QLabel("Timestamps")
+        title.setObjectName("settingsTitle")
+        content_layout.addWidget(title)
+        self.global_timestamps_checkbox = self._add_setting(
+            content_layout,
+            "Global timestamps",
+            "",
+            app.global_timestamps,
+            app.set_global_timestamps,
+        )
+        content_layout.addStretch()
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+        content_layout.addLayout(button_layout)
+        return content
 
     def _build_wi_page(self, app):
         content = QWidget()
@@ -1273,6 +1299,7 @@ class TimeStudyApp(QMainWindow):
         self.settings = QSettings("TimeStudyTool", "TimeStudyTool")
         self.auto_jump_to_slide = self.settings.value("wi/auto_jump_to_slide", True, type=bool)
         self.auto_open_wi_on_startup = self.settings.value("wi/auto_open_on_startup", True, type=bool)
+        self.global_timestamps = self.settings.value("timestamps/global", False, type=bool)
         self.settings.remove("ui/dark_mode")
 
         self.unsaved_changes = False
@@ -1351,6 +1378,34 @@ class TimeStudyApp(QMainWindow):
             return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         return f"{minutes:02d}:{seconds:02d}"
 
+    def timestamp_offset_ms(self, group):
+        if not self.global_timestamps or group is None:
+            return 0
+        offset_ms = 0
+        for index in range(self.video_tree.topLevelItemCount()):
+            preceding_group = self.video_tree.topLevelItem(index)
+            if preceding_group == group:
+                return offset_ms
+            offset_ms += preceding_group.data(1, Qt.UserRole) or 0
+        return 0
+
+    def format_timestamp(self, ms, group):
+        return self.format_ms(ms + self.timestamp_offset_ms(group))
+
+    def refresh_timestamp_display(self):
+        for index in range(self.video_tree.topLevelItemCount()):
+            group = self.video_tree.topLevelItem(index)
+            for item in [group] + [group.child(row) for row in range(group.childCount())]:
+                text = self.format_timestamp(item.data(4, Qt.UserRole) or 0, group)
+                widget = self.video_tree.itemWidget(item, 4)
+                if widget and hasattr(widget, "time_edit"):
+                    if widget.time_edit.text() != text:
+                        widget.time_edit.setText(text)
+                elif widget and hasattr(widget, "time_label"):
+                    widget.time_label.setText(text)
+                else:
+                    item.setText(4, text)
+
     def next_frame(self):
         """Advances the video by a single frame and updates the UI."""
         if self.cap and self.cap.isOpened() and self.is_playing:
@@ -1394,7 +1449,7 @@ class TimeStudyApp(QMainWindow):
                 self.slider.setValue(current_ms)
                 self.slider.blockSignals(False)
                 
-                self.time_label.setText(f"{self.format_ms(current_ms)} / {self.format_ms(self.duration_ms)} (◄ / ► Arrow Keys = ±1s)")
+                self.time_label.setText(f"{self.format_timestamp(current_ms, self.active_group_item)} / {self.format_timestamp(self.duration_ms, self.active_group_item)} (◄ / ► Arrow Keys = ±1s)")
                 self.refresh_playback_ui()
             else:
                 self.toggle_play() # Pause at physical end of video
@@ -1469,7 +1524,7 @@ class TimeStudyApp(QMainWindow):
                 self.slider.setValue(display_ms)
                 self.slider.blockSignals(False)
 
-                self.time_label.setText(f"{self.format_ms(display_ms)} / {self.format_ms(self.duration_ms)} (◄ / ► Arrow Keys = ±1s)")
+                self.time_label.setText(f"{self.format_timestamp(display_ms, self.active_group_item)} / {self.format_timestamp(self.duration_ms, self.active_group_item)} (◄ / ► Arrow Keys = ±1s)")
                 self.refresh_playback_ui()
 
     def step_time(self, delta_ms):
@@ -1483,7 +1538,7 @@ class TimeStudyApp(QMainWindow):
             self.slider.blockSignals(True)
             self.slider.setValue(int(self.target_seek_ms))
             self.slider.blockSignals(False)
-            self.time_label.setText(f"{self.format_ms(self.target_seek_ms)} / {self.format_ms(self.duration_ms)} (Scrubbing...)")
+            self.time_label.setText(f"{self.format_timestamp(self.target_seek_ms, self.active_group_item)} / {self.format_timestamp(self.duration_ms, self.active_group_item)} (Scrubbing...)")
             
             # Delay the actual heavy OpenCV seek by 100ms
             self.seek_timer.start(10)
@@ -2009,6 +2064,12 @@ class TimeStudyApp(QMainWindow):
 
     def open_settings(self):
         SettingsDialog(self).exec_()
+
+    def set_global_timestamps(self, enabled):
+        self.global_timestamps = enabled
+        self.settings.setValue("timestamps/global", enabled)
+        self.settings.sync()
+        self.refresh_playback_ui()
 
     def set_auto_jump_to_slide(self, enabled):
         self.auto_jump_to_slide = enabled
@@ -3084,6 +3145,15 @@ class TimeStudyApp(QMainWindow):
         item.setData(0, Qt.UserRole, video_path)
         item.setData(1, Qt.UserRole, start_ms)
         item.setData(2, Qt.UserRole, end_ms)
+        if slices:
+            self.active_group_item = self.video_tree.topLevelItem(segment["video_g_idx"])
+        else:
+            self.active_group_item = next(
+                (self.video_tree.topLevelItem(index)
+                 for index in range(self.video_tree.topLevelItemCount())
+                 if self.video_tree.topLevelItem(index).data(0, Qt.UserRole) == video_path),
+                None,
+            )
         
         if self.active_video_path != video_path or not self.cap or not self.cap.isOpened():
             if self.cap:
@@ -3680,11 +3750,14 @@ class TimeStudyApp(QMainWindow):
                 widget.play_btn.setStyleSheet("""QPushButton { border: none; background-color: transparent; color: #2563EB; font-size: 14px; font-weight: bold; padding: 2px 4px; border-radius: 4px; } QPushButton:hover { background-color: rgba(37, 99, 235, 0.15); color: #1D4ED8; }""")
 
     def refresh_playback_ui(self):
+        self.refresh_timestamp_display()
         if self.cap and self.cap.isOpened():
             current_ms = int(self.cap.get(cv2.CAP_PROP_POS_MSEC))
             self.highlight_active_row(current_ms)
         else:
+            current_ms = 0
             self.highlight_active_row(0)
+        self.time_label.setText(f"{self.format_timestamp(current_ms, self.active_group_item)} / {self.format_timestamp(self.duration_ms, self.active_group_item)} (◄ / ► Arrow Keys = ±1s)")
 
     def highlight_active_row(self, pos_ms):
         if self.view_mode in ("pareto", "pareto_slide"):
@@ -3751,13 +3824,15 @@ class TimeStudyApp(QMainWindow):
                         w.set_fill_ratio(0.0)
 
     def create_inline_action_widget(self, time_str, item=None, is_editable=True, on_play=None, on_delete=None, on_jump=None):
+        if item is not None and item.treeWidget() == self.video_tree:
+            time_str = self.format_timestamp(item.data(4, Qt.UserRole) or 0, item.parent() or item)
         widget = TimeColumnWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(2, 0, 2, 0)
         layout.setSpacing(4)
         if is_editable and item is not None:
             time_edit = QLineEdit(time_str)
-            time_edit.setFixedWidth(55)
+            time_edit.setFixedWidth(88)
             time_edit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             time_edit.setStyleSheet("QLineEdit { font-size: 14px; font-weight: bold; font-family: monospace; background: transparent; border: 1px solid transparent; color: inherit; padding: 1px 2px; } QLineEdit:focus { background-color: #2563EB; color: #FFFFFF; border-radius: 4px; }")
             time_edit.editingFinished.connect(lambda: self.commit_time_edit(item))
@@ -3823,14 +3898,14 @@ class TimeStudyApp(QMainWindow):
         w = self.video_tree.itemWidget(item, 4)
         if w and hasattr(w, 'time_edit'):
             raw_text = w.time_edit.text()
-            new_ms = self.parse_time_ms(None, raw_text)
+            new_ms = self.parse_time_ms(None, raw_text) - self.timestamp_offset_ms(item.parent())
             group_dur = item.parent().data(1, Qt.UserRole) or self.duration_ms
             new_ms = max(0, min(group_dur, new_ms))
             new_str = self.format_ms(new_ms)
             old_ms = item.data(4, Qt.UserRole)
             item.setData(4, Qt.UserRole, new_ms)
             item.setData(4, Qt.UserRole + 1, new_str)
-            w.time_edit.setText(new_str)
+            w.time_edit.setText(self.format_timestamp(new_ms, item.parent()))
             if old_ms != new_ms:
                 self.seek_position(new_ms)
                 self.push_state()
@@ -3843,13 +3918,15 @@ class TimeStudyApp(QMainWindow):
         if w:
             time_val_str = w.time_edit.text() if hasattr(w, 'time_edit') else item.data(4, Qt.UserRole + 1)
             curr_ms = self.parse_time_ms(item.data(4, Qt.UserRole), time_val_str)
+            if hasattr(w, 'time_edit'):
+                curr_ms -= self.timestamp_offset_ms(item.parent())
             group_dur = item.parent().data(1, Qt.UserRole) or self.duration_ms
             new_ms = max(0, min(group_dur, curr_ms + delta_ms))
             new_str = self.format_ms(new_ms)
             item.setData(4, Qt.UserRole, new_ms)
             item.setData(4, Qt.UserRole + 1, new_str)
             if hasattr(w, 'time_edit'):
-                w.time_edit.setText(new_str)
+                w.time_edit.setText(self.format_timestamp(new_ms, item.parent()))
                 w.time_edit.selectAll()
             self.seek_position(new_ms)
             self.push_state()
@@ -3979,6 +4056,7 @@ class TimeStudyApp(QMainWindow):
             if child_count > 0:
                 end_item = group.child(child_count - 1)
                 end_item.setText(3, f"END VIDEO {i + 1}")
+            self.refresh_timestamp_display()
 
     def switch_active_video(self, group_item, target_ms=0):
         if not group_item: return
